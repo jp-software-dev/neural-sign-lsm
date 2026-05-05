@@ -1,0 +1,15 @@
+# Entornos virtuales
+venv/
+env/
+
+# Archivos compilados de Python
+__pycache__/
+*.pyc
+
+# Archivos de logs de nuestro módulo utils
+logs/*.log
+
+# Datos y modelos pesados de la IA (los subiremos después si es necesario)
+data/processed/*.csv
+data/processed/*.json
+models/*.h5
