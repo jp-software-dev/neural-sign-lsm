@@ -114,11 +114,11 @@ class SignLanguageTrainer:
             Dense(256, kernel_regularizer=regularizers.l2(0.001)),
             BatchNormalization(),
             Activation('relu'),
-            Dropout(0.3),
+            Dropout(0.35),
             Dense(128, kernel_regularizer=regularizers.l2(0.001)),
             BatchNormalization(),
             Activation('relu'),
-            Dropout(0.2),
+            Dropout(0.25),
             Dense(64, kernel_regularizer=regularizers.l2(0.001)),
             BatchNormalization(),
             Activation('relu'),
@@ -140,17 +140,31 @@ class SignLanguageTrainer:
         ])
         self.model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
 
+    def _augment_data(self, X, y, noise_factor=0.04):
+        # Inyecta ruido gaussiano para simular variaciones de distancia e inclinación anatómica
+        noise = np.random.normal(loc=0.0, scale=noise_factor, size=X.shape)
+        X_noisy = X + noise
+        X_combined = np.vstack((X, X_noisy))
+        y_combined = np.vstack((y, y))
+        return X_combined, y_combined
+
     def train_model(self):
         try:
             X, y = self.load_data()
             X_train, X_test, y_train, y_test, idx_train, _ = train_test_split(
                 X, y, np.arange(len(y)), test_size=0.2, random_state=42
             )
+            
+            # Aplicamos el aumento de datos solo al conjunto de entrenamiento para no corromper la validación
             if self.mode == 'static':
-                self.build_model(input_shape=X.shape[1])
+                X_train, y_train = self._augment_data(X_train, y_train)
+
+            if self.mode == 'static':
+                self.build_model(input_shape=X_train.shape[1])
             else:
-                self.build_model(input_shape=(X.shape[1], X.shape[2]))
-            y_encoded_train = self._y_encoded_all[idx_train]
+                self.build_model(input_shape=(X_train.shape[1], X_train.shape[2]))
+                
+            y_encoded_train = np.argmax(y_train, axis=1)
             classes = np.unique(y_encoded_train)
             weights = compute_class_weight(
                 class_weight='balanced',
@@ -158,13 +172,15 @@ class SignLanguageTrainer:
                 y=y_encoded_train,
             )
             class_weight_dict = dict(zip(classes.tolist(), weights.tolist()))
+            
             early_stop = EarlyStopping(monitor='val_loss', patience=15, restore_best_weights=True)
             checkpoint = ModelCheckpoint(AI_MODEL_PATH, monitor='val_accuracy', save_best_only=True, verbose=1)
             reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-5, verbose=1)
+            
             self.model.fit(
                 X_train, y_train,
                 validation_data=(X_test, y_test),
-                epochs=100,
+                epochs=120,
                 batch_size=32,
                 class_weight=class_weight_dict,
                 callbacks=[early_stop, checkpoint, reduce_lr],
