@@ -117,6 +117,7 @@ def main():
     # --------------------------------
 
     voice.speak("Sistema iniciado. Presiona 1 para traduccion libre, 2 para velocidad, 3 para deletreo, o 4 para salir.")
+    time.sleep(2) # Pausa para dar tiempo al motor de voz a inicializar
 
     frame_interval = 1.0 / FPS_LIMIT
     last_frame_time = 0.0
