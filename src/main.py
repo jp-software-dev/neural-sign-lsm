@@ -16,22 +16,28 @@ from src.config.settings import (
     COLOR_SUCCESS, COLOR_DANGER, COLOR_INFO, FPS_LIMIT,
 )
 from src.ai_engine.hand_tracking import HandTracker
-from src.modules import VoiceAssistant, SpeedGame, SpellingGame, GameMode
+from src.modules import VoiceAssistant, SignGame, GameMode
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
-HUD_BG_COLOR = (10, 10, 10)
-STREAK_COLOR = (0, 215, 255)   
-WORD_COLOR = (255, 255, 80)    
-PROGRESS_COLOR = (180, 255, 180)
+
+# --- Paleta de Colores y Estilos de UI/UX (BGR) ---
+HUD_BG_COLOR = (20, 20, 20)          # Fondo semitransparente del HUD
+STREAK_COLOR = (0, 255, 255)         # Amarillo para rachas y puntos
+WORD_COLOR = (255, 255, 255)         # Blanco para la palabra/progreso actual
+PROGRESS_COLOR = (180, 255, 180)     # Verde claro para la barra de progreso
 
 def draw_hud(frame, status_text, color, game):
+    """Dibuja el Head-Up Display (HUD) con información de estado y juego."""
     h, w = frame.shape[:2]
     overlay = frame.copy()
     
+    # --- Fondo Semitransparente ---
+    # Usamos addWeighted para crear un efecto de superposición profesional.
     bar_height = 105 if (game and game.game_active) else 45
     cv2.rectangle(overlay, (0, 0), (w, bar_height), HUD_BG_COLOR, -1)
-    cv2.addWeighted(overlay, 0.65, frame, 0.35, 0, frame)
+    cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
     
+    # --- Textos del HUD ---
     cv2.putText(frame, status_text, (15, 30), FONT, 0.8, color, 2, cv2.LINE_AA)
 
     if game and game.game_active:
@@ -39,7 +45,7 @@ def draw_hud(frame, status_text, color, game):
         cv2.putText(frame, f"Palabra: {progress}", (15, 65), FONT, 0.8, WORD_COLOR, 2, cv2.LINE_AA)
         hud_right = (
             f"Pts: {game.score} | "
-            f"Racha: {game.streak}x | " if game.MODE == GameMode.SPEED else ""
+            f"Racha: {game.streak}x | " if game.MODE == GameMode.GAME else ""
             f"Palabras: {game.words_completed} | "
             f"Tiempo: {game.time_left}s"
         )
@@ -48,10 +54,11 @@ def draw_hud(frame, status_text, color, game):
         bar_color = COLOR_SUCCESS if game.time_left > 20 else COLOR_DANGER
         cv2.rectangle(frame, (0, h - 8), (bar_w, h), bar_color, -1)
 
-    hint = "1: Libre | 2: Velocidad | 3: Deletreo | 4: Salir"
+    hint = "1: Libre | 2: Juego | 3: Salir"
     cv2.putText(frame, hint, (15, h - 16), FONT, 0.55, (200, 200, 200), 1, cv2.LINE_AA)
 
 def draw_summary(frame, game):
+    """Dibuja la pantalla de resumen de la sesión de juego."""
     h, w = frame.shape[:2]
     overlay = frame.copy()
     
@@ -60,19 +67,17 @@ def draw_summary(frame, game):
     y_start = int(h * 0.20)
     y_end = int(h * 0.82)
     cv2.rectangle(overlay, (x_start, y_start), (x_end, y_end), (20, 20, 20), -1)
-    cv2.addWeighted(overlay, 0.85, frame, 0.15, 0, frame)
+    cv2.addWeighted(overlay, 0.8, frame, 0.2, 0, frame)
 
     lines = [
         "SESION TERMINADA",
         f"Puntuacion: {game.score} pts",
         f"Palabras:   {game.words_completed}",
     ]
-    if game.MODE == GameMode.SPEED:
+    if game.MODE == GameMode.GAME:
         lines.append(f"Mejor racha: {game.peak_streak}x")
-    elif game.MODE == GameMode.SPELLING:
-        lines.append(f"Errores:    {game.total_errors}")
 
-    lines.extend(["", "1: Libre | 2: Velocidad | 3: Deletreo", "                 4: Salir"])
+    lines.extend(["", "1: Libre | 2: Juego | 3: Salir"])
 
     for i, line in enumerate(lines):
         y = y_start + 60 + i * 40
@@ -80,11 +85,31 @@ def draw_summary(frame, game):
         scale = 0.85 if i == 0 else 0.7
         cv2.putText(frame, line, (x_start + 30, y), FONT, scale, color, 2 if i == 0 else 1, cv2.LINE_AA)
 
-def main():
-    # Reducimos el suavizado (alpha) para que la lectura de la mano sea más ágil y responsiva
-    tracker = HandTracker(ema_alpha=0.5)
-    voice = VoiceAssistant()
+def draw_difficulty_menu(frame):
+    """Dibuja el menú de selección de dificultad."""
+    h, w = frame.shape[:2]
+    overlay = frame.copy()
+    
+    x_start = int(w * 0.25)
+    x_end = int(w * 0.75)
+    y_start = int(h * 0.25)
+    y_end = int(h * 0.75)
+    cv2.rectangle(overlay, (x_start, y_start), (x_end, y_end), (20, 20, 20), -1)
+    cv2.addWeighted(overlay, 0.8, frame, 0.2, 0, frame)
 
+    lines = [
+        "SELECCIONA LA DIFICULTAD", "1: Facil", "2: Medio", "3: Dificil",
+        "4: Aleatorio", "", "5: Volver"
+    ]
+    for i, line in enumerate(lines):
+        y = y_start + 60 + i * 45
+        color = WORD_COLOR if i == 0 else (220, 220, 220)
+        scale = 0.8 if i == 0 else 0.7
+        text_size = cv2.getTextSize(line, FONT, scale, 2)[0]
+        cv2.putText(frame, line, (x_start + (x_end - x_start - text_size[0]) // 2, y), FONT, scale, color, 2 if i == 0 else 1, cv2.LINE_AA)
+
+def load_dependencies():
+    """Carga el modelo, el escalador y las etiquetas desde los archivos."""
     try:
         model = load_model(AI_MODEL_PATH)
         with open(LABELS_JSON_PATH, 'r') as f:
@@ -93,182 +118,195 @@ def main():
         available_letters = list(labels.values())
         with open(SCALER_PATH, 'rb') as f:
             scaler = pickle.load(f)
+        is_lstm = len(model.input_shape) == 3
+        print("[INFO] Dependencias cargadas correctamente.")
+        return model, scaler, labels, available_letters, is_lstm
     except Exception as e:
-        print(f"Error cargando modelo: {e}")
+        print(f"[ERROR] Crítico al cargar dependencias: {e}")
+        return None, None, None, None, False
+
+def process_prediction(landmarks, scaler, model, labels, is_lstm, sequence_buffer):
+    """Procesa los landmarks para obtener una predicción del modelo."""
+    prediction_input = None
+    if is_lstm:
+        sequence_buffer.append(landmarks)
+        if len(sequence_buffer) == SEQUENCE_LENGTH:
+            raw_data = np.array(sequence_buffer)
+            scaled_data = scaler.transform(raw_data)
+            prediction_input = np.expand_dims(scaled_data, axis=0)
+    else:
+        raw_data = np.array(landmarks).reshape(1, -1)
+        prediction_input = scaler.transform(raw_data)
+
+    if prediction_input is not None:
+        prediction = model.predict(prediction_input, verbose=0)
+        confidence = float(np.max(prediction))
+        class_index = int(np.argmax(prediction))
+        detected_letter = labels.get(class_index, "?")
+        return detected_letter, confidence
+    
+    return None, 0.0
+
+def handle_stability(detected_letter, confidence, candidate_letter, stable_frames):
+    """Gestiona el contador de estabilidad para confirmar una seña y retorna el estado."""
+    confirmed_letter = None
+    status_text = ""
+    color = COLOR_DANGER
+
+    if confidence > AI_CONFIDENCE_THRESHOLD:
+        if detected_letter == candidate_letter:
+            stable_frames += 1
+        else:
+            candidate_letter = detected_letter
+            stable_frames = 1
+        
+        REQUIRED_FRAMES = 5
+        if stable_frames >= REQUIRED_FRAMES:
+            confirmed_letter = candidate_letter
+            status_text = f"Letra: {confirmed_letter} ({int(confidence * 100)}%)"
+            color = COLOR_SUCCESS
+        else:
+            status_text = f"Sosten la seña... {stable_frames}/{REQUIRED_FRAMES}"
+            color = (0, 165, 255)
+    else:
+        candidate_letter = ""
+        stable_frames = 0
+        status_text = "Sena poco clara..."
+        color = COLOR_DANGER
+
+    return candidate_letter, stable_frames, confirmed_letter, status_text, color
+
+def reset_prediction_state(tracker, is_lstm, sequence_buffer):
+    """Resets states related to prediction and tracking."""
+    tracker.reset_smoothing()
+    if is_lstm and sequence_buffer is not None:
+        sequence_buffer.clear()
+    return "", 0, "" # last_prediction, stable_frames, candidate_letter
+
+def main():
+    model, scaler, labels, available_letters, is_lstm = load_dependencies()
+    if not model:
         return
 
-    is_lstm = len(model.input_shape) == 3
+    tracker = HandTracker(ema_alpha=0.3)
+    voice = VoiceAssistant()
     sequence_buffer = deque(maxlen=SEQUENCE_LENGTH) if is_lstm else None
-
+    
     game = None
     cap = cv2.VideoCapture(0)
     window_name = "NeuralSign-LSM - Traductor de Lengua de Senas Mexicana"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(window_name, 1024, 768)
 
+    # --- State Variables ---
+    app_state = "menu"  # "menu", "selecting_difficulty", "in_game", "summary"
+    game_class_to_start = None
     last_prediction = ""
-    show_summary = False
-    
-    # --- VARIABLES DE RIGUROSIDAD ---
-    STRICT_THRESHOLD = 0.85      # Exige 85% de certeza absoluta
-    REQUIRED_FRAMES = 5          # La mano debe mantenerse congelada y correcta por 5 frames seguidos
     stable_frames = 0
     candidate_letter = ""
-    # --------------------------------
+    status_text = "Iniciando..."
+    color = COLOR_INFO
 
-    voice.speak("Sistema iniciado. Presiona 1 para traduccion libre, 2 para velocidad, 3 para deletreo, o 4 para salir.")
-    time.sleep(2) # Pausa para dar tiempo al motor de voz a inicializar
+    voice.speak("Sistema iniciado. Presiona 1 para Modo Libre, 2 para Modo Juego, o 3 para Salir.")
+    time.sleep(2)
 
     frame_interval = 1.0 / FPS_LIMIT
-    last_frame_time = 0.0
 
     while cap.isOpened():
-        now = time.time()
-        if now - last_frame_time < frame_interval:
-            cv2.waitKey(1)
-            continue
-        last_frame_time = now
-
+        start_time = time.time()
         success, frame = cap.read()
         if not success:
             break
-
         frame = cv2.flip(frame, 1)
-        results = tracker.find_hands(frame)
 
-        if game and game.game_active:
-            expired, msg = game.check_time()
-            if expired:
-                status_text = msg
-                show_summary = True
-                if hasattr(game, 'pending_voice') and game.pending_voice:
-                    for v_msg in game.pending_voice:
-                        voice.speak(v_msg)
-                    game.pending_voice.clear()
-                else: 
-                    voice.speak(msg)
+        elapsed_time = time.time() - start_time
+        wait_time = max(1, int((frame_interval - elapsed_time) * 1000))
+        key = cv2.waitKey(wait_time) & 0xFF
 
-        landmarks = tracker.get_landmarks(results, smooth=True)
-        hand_confidence = tracker.get_hand_confidence()
-        status_text = "Esperando mano..."
-        color = COLOR_INFO
+        # --- State Machine ---
+        if app_state == "selecting_difficulty":
+            draw_difficulty_menu(frame)
+            if key != 255:
+                difficulty = None
+                if key == ord('1'): difficulty = "facil"
+                elif key == ord('2'): difficulty = "medio"
+                elif key == ord('3'): difficulty = "dificil"
+                elif key == ord('4'): difficulty = "aleatorio"
+                elif key == ord('5') or key == 27:
+                    app_state = "menu"
+                    game_class_to_start = None
+                    voice.speak("Seleccion cancelada.")
 
-        if landmarks and len(landmarks) == 63 and hand_confidence > 0.4:
-            tracker.draw_landmarks(frame, landmarks)
-            prediction_ready = False
-            prediction_input = None
-
-            if is_lstm:
-                sequence_buffer.append(landmarks)
-                if len(sequence_buffer) == SEQUENCE_LENGTH:
-                    raw_data = np.array(sequence_buffer)
-                    scaled_data = scaler.transform(raw_data)
-                    prediction_input = np.expand_dims(scaled_data, axis=0)
-                    prediction_ready = True
-                else:
-                    status_text = f"Capturando... {len(sequence_buffer)}/{SEQUENCE_LENGTH}"
-            else:
-                raw_data = np.array(landmarks).reshape(1, -1)
-                prediction_input = scaler.transform(raw_data)
-                prediction_ready = True
-
-            if prediction_ready:
-                prediction = model.predict(prediction_input, verbose=0)
-                confidence = float(np.max(prediction))
-                class_index = int(np.argmax(prediction))
-                detected_letter = labels.get(class_index, "?")
-
-                # CANDADO 1: Filtro matemático de alta precisión
-                if confidence > STRICT_THRESHOLD:
+                if difficulty and game_class_to_start:
+                    game = game_class_to_start(available_letters, difficulty=difficulty)
+                    target = game.start_game()
+                    app_state = "in_game"
+                    last_prediction, stable_frames, candidate_letter = reset_prediction_state(tracker, is_lstm, sequence_buffer)
                     
-                    # CANDADO 2: Acumulador de estabilidad temporal
-                    if detected_letter == candidate_letter:
-                        stable_frames += 1
-                    else:
-                        candidate_letter = detected_letter
-                        stable_frames = 1
+                    if game.MODE == GameMode.GAME:
+                        voice.speak(f"Dificultad {difficulty}. Tu primera letra es {target}")
 
-                    # Si el usuario sostuvo la seña clara y firme durante los frames requeridos
-                    if stable_frames >= REQUIRED_FRAMES:
-                        status_text = f"Letra: {detected_letter} ({int(confidence * 100)}%)"
-                        color = COLOR_SUCCESS
+        elif app_state in ["menu", "in_game", "summary"]:
+            if app_state != "summary":
+                landmarks = tracker.get_landmarks(tracker.find_hands(frame), smooth=True)
+                hand_confidence = tracker.get_hand_confidence()
 
-                        if detected_letter != last_prediction:
-                            if not (game and game.game_active):
-                                voice.speak(detected_letter)
-                            last_prediction = detected_letter
-                            if is_lstm:
-                                sequence_buffer.clear()
+                if landmarks and hand_confidence > 0.4:
+                    tracker.draw_landmarks(frame, landmarks)
+                    detected_letter, confidence = process_prediction(landmarks, scaler, model, labels, is_lstm, sequence_buffer)
 
-                        if game and game.game_active:
-                            is_correct, game_msg = game.check_prediction(detected_letter)
-                            status_text = game_msg
+                    if detected_letter:
+                        candidate_letter, stable_frames, confirmed, text, c = handle_stability(detected_letter, confidence, candidate_letter, stable_frames)
+                        status_text, color = text, c
 
-                            if hasattr(game, 'pending_voice') and game.pending_voice:
-                                for v_msg in game.pending_voice:
-                                    voice.speak(v_msg)
-                                game.pending_voice.clear()
-                            elif is_correct: 
-                                voice.speak("Correcto")
-                                if game.game_active: 
-                                    voice.speak(game.target_letter)
-
-                            if not game.game_active and not show_summary:
-                                show_summary = True
-                                if not hasattr(game, 'pending_voice'):
-                                    voice.speak(game_msg)
-                    else:
-                        # Feedback en pantalla de que la está haciendo bien pero necesita sostenerla
-                        status_text = f"Sosten la seña... {stable_frames}/{REQUIRED_FRAMES}"
-                        color = (0, 165, 255) # Naranja
+                        if confirmed and confirmed != last_prediction:
+                            last_prediction = confirmed
+                            if app_state == "in_game" and game:
+                                _, game_msg = game.check_prediction(confirmed)
+                                status_text = game_msg
+                                if hasattr(game, 'pending_voice') and game.pending_voice:
+                                    for v_msg in game.pending_voice: voice.speak(v_msg)
+                                    game.pending_voice.clear()
+                                if not game.game_active:
+                                    app_state = "summary"
+                                    if not hasattr(game, 'pending_voice'): voice.speak(game_msg)
+                            else: # Modo Libre
+                                voice.speak(confirmed)
+                            if is_lstm: sequence_buffer.clear()
+                    elif is_lstm:
+                        status_text, color = f"Capturando... {len(sequence_buffer)}/{SEQUENCE_LENGTH}", COLOR_INFO
                 else:
-                    stable_frames = 0 # Resetea la cuenta si detecta una anomalía
-                    status_text = "Sena poco clara..."
-                    color = COLOR_DANGER
-        else:
-            stable_frames = 0
-            if is_lstm and sequence_buffer:
-                sequence_buffer.clear()
+                    status_text, color, stable_frames, candidate_letter = "Esperando mano...", COLOR_INFO, 0, ""
+                    if is_lstm and sequence_buffer: sequence_buffer.clear()
 
-        draw_hud(frame, status_text, color, game)
+            if app_state == "in_game" and game:
+                expired, msg = game.check_time()
+                if expired:
+                    status_text, app_state = msg, "summary"
+                    if hasattr(game, 'pending_voice') and game.pending_voice:
+                        for v_msg in game.pending_voice: voice.speak(v_msg)
+                        game.pending_voice.clear()
+                    else: voice.speak(msg)
 
-        if show_summary and game and not game.game_active:
-            draw_summary(frame, game)
+            draw_hud(frame, status_text, color, game)
+            if app_state == "summary" and game:
+                draw_summary(frame, game)
+
+            if key != 255:
+                if key == ord('3') or key == 27:
+                    break
+                elif key == ord('1'):
+                    app_state = "menu"
+                    game = None
+                    last_prediction, stable_frames, candidate_letter = reset_prediction_state(tracker, is_lstm, sequence_buffer)
+                    voice.speak("Traduccion libre activada.")
+                elif key == ord('2'):
+                    app_state = "selecting_difficulty"
+                    game_class_to_start = SignGame
+                    game = None
+                    voice.speak("Selecciona la dificultad para el modo de juego.")
 
         cv2.imshow(window_name, frame)
-        key = cv2.waitKey(1) & 0xFF
-
-        if key == ord('4') or key == 27:
-            break
-        elif key == ord('1'):
-            show_summary = False
-            game = None
-            tracker.reset_smoothing()
-            stable_frames = 0
-            if is_lstm:
-                sequence_buffer.clear()
-            voice.speak("Traduccion libre activada.")
-        elif key == ord('2'):
-            show_summary = False
-            game = SpeedGame(available_letters, difficulty="aleatorio")
-            target = game.start_game()
-            tracker.reset_smoothing()
-            stable_frames = 0
-            if is_lstm:
-                sequence_buffer.clear()
-            voice.speak(f"Evaluacion de velocidad. Tu primera letra es {target}")
-        elif key == ord('3'):
-            show_summary = False
-            game = SpellingGame(available_letters, difficulty="aleatorio")
-            _ = game.start_game() 
-            tracker.reset_smoothing()
-            stable_frames = 0
-            if is_lstm:
-                sequence_buffer.clear()
-            voice.speak("Evaluacion de deletreo iniciada.")
-            for msg in game.pending_voice:
-                voice.speak(msg)
-            game.pending_voice.clear()
 
     cap.release()
     cv2.destroyAllWindows()
