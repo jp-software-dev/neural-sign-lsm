@@ -5,7 +5,9 @@ import pickle
 import pandas as pd
 import numpy as np
 import random
+import cv2
 import tensorflow as tf # type: ignore
+from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.utils.class_weight import compute_class_weight
@@ -23,6 +25,57 @@ from src.config.settings import (
     MODELS_DIR, SCALER_PATH,
 )
 from src.utils import app_logger
+
+# --- Constantes y Funciones para Visualización de Errores ---
+
+HAND_CONNECTIONS = [
+    # Palma
+    (0, 1), (1, 5), (5, 9), (9, 13), (13, 17), (0, 17),
+    # Pulgar
+    (1, 2), (2, 3), (3, 4),
+    # Índice
+    (5, 6), (6, 7), (7, 8),
+    # Medio
+    (9, 10), (10, 11), (11, 12),
+    # Anular
+    (13, 14), (14, 15), (15, 16),
+    # Meñique
+    (17, 18), (18, 19), (19, 20),
+]
+
+def _draw_landmarks_on_canvas(landmarks_flat, true_label, pred_label, img_size=400, padding=40):
+    """Dibuja los landmarks de la mano en un lienzo en blanco para visualización."""
+    if landmarks_flat is None or len(landmarks_flat) != 63:
+        return None
+
+    img = np.zeros((img_size, img_size, 3), dtype=np.uint8)
+    pts = np.array(landmarks_flat).reshape(21, 3)
+
+    # Normaliza y centra la mano en el lienzo
+    x_coords, y_coords = pts[:, 0], pts[:, 1]
+    min_x, max_x = np.min(x_coords), np.max(x_coords)
+    min_y, max_y = np.min(y_coords), np.max(y_coords)
+
+    scale = min(
+        (img_size - 2 * padding) / (max_x - min_x) if (max_x - min_x) > 0 else 1,
+        (img_size - 2 * padding) / (max_y - min_y) if (max_y - min_y) > 0 else 1
+    )
+    offset_x = padding - min_x * scale
+    offset_y = padding - min_y * scale
+
+    pixel_pts = [(int(p[0] * scale + offset_x), int(p[1] * scale + offset_y)) for p in pts]
+
+    # Dibuja las conexiones y los puntos
+    for (a, b) in HAND_CONNECTIONS:
+        cv2.line(img, pixel_pts[a], pixel_pts[b], (220, 220, 220), 1, cv2.LINE_AA)
+    for idx, pt in enumerate(pixel_pts):
+        radius = 6 if idx in (4, 8, 12, 16, 20) else 4
+        cv2.circle(img, pt, radius, (0, 255, 120), -1, cv2.LINE_AA)
+
+    # Agrega texto de etiquetas
+    cv2.putText(img, f"Real: {true_label}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+    cv2.putText(img, f"Prediccion: {pred_label}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+    return img
 
 def set_seed(seed: int = 42):
     os.environ['PYTHONHASHSEED'] = str(seed)
@@ -185,8 +238,57 @@ class SignLanguageTrainer:
                 class_weight=class_weight_dict,
                 callbacks=[early_stop, checkpoint, reduce_lr],
             )
+            # Después de entrenar, generar y guardar el reporte de clasificación
+            self._save_training_report(X_test, y_test)
         except Exception as e:
-            app_logger.error(f"Fallo crítico durante el entrenamiento: {str(e)}")
+            app_logger.error(f"Fallo crítico durante el entrenamiento: {e}")
+
+    def _save_training_report(self, X_test, y_test):
+        try:
+            print("\n[INFO] Generando reporte de clasificación y matriz de confusión...")
+            y_pred_probs = self.model.predict(X_test)
+            y_pred = np.argmax(y_pred_probs, axis=1)
+            y_true = np.argmax(y_test, axis=1)
+            report = classification_report(y_true, y_pred, target_names=self.label_encoder.classes_, zero_division=0)
+            conf_matrix = confusion_matrix(y_true, y_pred)
+            report_path = os.path.join(MODELS_DIR, "training_report.txt")
+            with open(report_path, 'w', encoding='utf-8') as f:
+                f.write("Reporte de Clasificación del Entrenamiento\n")
+                f.write("="*40 + "\n")
+                f.write(report)
+                f.write("\n\nMatriz de Confusión\n")
+                f.write("="*40 + "\n")
+                f.write(np.array2string(conf_matrix, separator=', '))
+            print(f"[INFO] Reporte guardado en: {report_path}")
+
+            # --- Visualización de errores ---
+            print("[INFO] Visualizando predicciones incorrectas...")
+            incorrect_indices = np.where(y_pred != y_true)[0]
+
+            if len(incorrect_indices) == 0:
+                print("[INFO] No se encontraron predicciones incorrectas para visualizar.")
+                return
+
+            error_dir = os.path.join(MODELS_DIR, "error_analysis")
+            os.makedirs(error_dir, exist_ok=True)
+
+            num_to_show = min(5, len(incorrect_indices))
+            show_indices = random.sample(list(incorrect_indices), num_to_show)
+
+            for i, idx in enumerate(show_indices):
+                landmarks_scaled = X_test[idx]
+                if self.mode == 'lstm':
+                    landmarks_scaled = landmarks_scaled[-1]
+                landmarks_flat = self.scaler.inverse_transform(landmarks_scaled.reshape(1, -1))[0]
+                true_label = self.label_encoder.classes_[y_true[idx]]
+                pred_label = self.label_encoder.classes_[y_pred[idx]]
+                error_image = _draw_landmarks_on_canvas(landmarks_flat, true_label, pred_label)
+                if error_image is not None:
+                    filename = f"error_{i+1}_true-{true_label}_pred-{pred_label}.png"
+                    cv2.imwrite(os.path.join(error_dir, filename), error_image)
+            print(f"[INFO] {len(show_indices)} imágenes de error guardadas en: {error_dir}")
+        except Exception as e:
+            app_logger.error(f"No se pudo generar el reporte de entrenamiento o visualizar errores: {e}")
 
     def _save_scaler(self):
         try:
