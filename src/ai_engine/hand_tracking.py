@@ -5,10 +5,8 @@ from mediapipe.tasks.python import vision
 from mediapipe.tasks.python.core.base_options import BaseOptions
 from src.config.settings import MP_DETECTION_CONFIDENCE, MP_TRACKING_CONFIDENCE
 
-# ==========================================
 # Índices de conexiones de la mano (MediaPipe)
 # Cada tupla (A, B) dibuja una línea entre el landmark A y el B
-# ==========================================
 HAND_CONNECTIONS = [
     # Palma
     (0, 1), (1, 5), (5, 9), (9, 13), (13, 17), (0, 17),
@@ -50,10 +48,7 @@ class HandTracker:
         self.prev_smoothed_landmarks = None
         self.consecutive_no_hand = 0
 
-    # ------------------------------------------------------------------
     # Detección
-    # ------------------------------------------------------------------
-
     def find_hands(self, frame):
         """Procesa un frame BGR y almacena los resultados internamente."""
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -65,15 +60,12 @@ class HandTracker:
         """Alias de find_hands para mantener consistencia con data_gather.py."""
         return self.find_hands(frame)
 
-    # ------------------------------------------------------------------
     # Landmarks
-    # ------------------------------------------------------------------
-
     def get_landmarks(self, results=None, smooth=True):
-        """
-        Retorna una lista plana de 63 floats [x0,y0,z0, x1,y1,z1, ...]
-        o [] si no hay mano detectada.
-        """
+        # --- Filtro de Suavizado (Media Móvil Exponencial - EMA) ---
+        # Para estabilizar los landmarks y reducir el "temblor", aplicamos un
+        # filtro EMA. Un `ema_alpha` más bajo dará más peso a los frames
+        # anteriores, resultando en un movimiento más suave pero con más latencia.
         target_results = results if results is not None else self.results
 
         if not target_results or not target_results.hand_landmarks:
@@ -103,13 +95,7 @@ class HandTracker:
         """Reinicia el acumulador EMA (p. ej. al iniciar una nueva ronda de juego)."""
         self.prev_smoothed_landmarks = None
 
-    # ------------------------------------------------------------------
     # Confianza de detección
-    # FIX: La API de MediaPipe Tasks expone `handedness[0].score`, no
-    #      `hand_presence`. El atributo anterior causaba una excepción
-    #      silenciosa y retornaba siempre 0.0, deshabilitando el umbral.
-    # ------------------------------------------------------------------
-
     def get_hand_confidence(self):
         """
         Retorna la confianza de detección de la mano [0.0 – 1.0].
@@ -122,11 +108,8 @@ class HandTracker:
             return float(self.results.handedness[0][0].score)
         except (IndexError, AttributeError):
             return 0.0
-
-    # ------------------------------------------------------------------
+        
     # Dibujo
-    # ------------------------------------------------------------------
-
     def draw_landmarks(self, frame, smoothed_landmarks):
         """
         Dibuja los 21 landmarks Y las conexiones del esqueleto de la mano
