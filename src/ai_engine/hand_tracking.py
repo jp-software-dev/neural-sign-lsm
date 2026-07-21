@@ -117,8 +117,7 @@ class HandTracker:
         # Dibuja los puntos de los landmarks
         for idx, (px, py) in enumerate(pixel_pts):
             radius = 6 if idx in (4, 8, 12, 16, 20) else 4
-            cv2.circle(frame, (px, py), radius, (0, 255, 120), -1, cv2.LINE_AA)
-            cv2.circle(frame, (px, py), radius, (0, 180, 80), 1, cv2.LINE_AA)
+            cv2.circle(frame, (px, py), radius, (0, 255, 120), -1)
 
         return frame
 
