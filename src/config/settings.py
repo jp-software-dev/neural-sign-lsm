@@ -23,8 +23,8 @@ CAMERA_HEIGHT = 720
 FPS_LIMIT = 30
 
 # Definimos los hiperparametros de umbral para el motor de inferencia de topologia de MediaPipe minimizando falsos positivos
-MP_DETECTION_CONFIDENCE = 0.7
-MP_TRACKING_CONFIDENCE = 0.5
+MP_DETECTION_CONFIDENCE = 0.8
+MP_TRACKING_CONFIDENCE = 0.7
 # Establecemos el limite de activacion softmax requerido para confirmar la prediccion final de la red neuronal densa
 AI_CONFIDENCE_THRESHOLD = 0.85
 
