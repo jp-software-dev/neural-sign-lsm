@@ -1,3 +1,6 @@
+# Punto de entrada principal de la aplicación NeuralSign-LSM.
+# Gestiona el bucle de video, la detección de manos, la predicción de señas,
+# la lógica de juego y la interfaz de usuario renderizada con OpenCV.
 import cv2
 import numpy as np
 import json
@@ -8,7 +11,6 @@ import time
 from collections import deque
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from tensorflow.keras.models import load_model # type: ignore
 from src.config.settings import (
     AI_MODEL_PATH, LABELS_JSON_PATH, SCALER_PATH,
@@ -16,28 +18,26 @@ from src.config.settings import (
     COLOR_SUCCESS, COLOR_DANGER, COLOR_INFO, FPS_LIMIT,
 )
 from src.ai_engine.hand_tracking import HandTracker
-from src.modules import VoiceAssistant, SignGame, GameMode
+from src.modules import VoiceAssistant, SignGame, GameMode, profile_manager
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
-# --- Paleta de Colores y Estilos de UI/UX (BGR) ---
-HUD_BG_COLOR = (20, 20, 20)          # Fondo semitransparente del HUD
-STREAK_COLOR = (0, 255, 255)         # Amarillo para rachas y puntos
-WORD_COLOR = (255, 255, 255)         # Blanco para la palabra/progreso actual
-PROGRESS_COLOR = (180, 255, 180)     # Verde claro para la barra de progreso
+# --- Constantes de UI/UX ---
+HUD_BG_COLOR = (20, 20, 20)
+STREAK_COLOR = (0, 255, 255)
+WORD_COLOR = (255, 255, 255)
+PROGRESS_COLOR = (180, 255, 180)
 
 def draw_hud(frame, status_text, color, game):
-    """Dibuja el Head-Up Display (HUD) con información de estado y juego."""
+    # Dibuja el Head-Up Display (HUD) con información de estado y juego.
     h, w = frame.shape[:2]
     overlay = frame.copy()
     
     # --- Fondo Semitransparente ---
-    # Usamos addWeighted para crear un efecto de superposición profesional.
     bar_height = 105 if (game and game.game_active) else 45
     cv2.rectangle(overlay, (0, 0), (w, bar_height), HUD_BG_COLOR, -1)
     cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
     
-    # --- Textos del HUD ---
     cv2.putText(frame, status_text, (15, 30), FONT, 0.8, color, 2, cv2.LINE_AA)
 
     if game and game.game_active:
@@ -54,11 +54,11 @@ def draw_hud(frame, status_text, color, game):
         bar_color = COLOR_SUCCESS if game.time_left > 20 else COLOR_DANGER
         cv2.rectangle(frame, (0, h - 8), (bar_w, h), bar_color, -1)
 
-    hint = "1: Libre | 2: Juego | 3: Salir"
+    hint = "1: Libre | 2: Juego | 3: Puntuaciones | 4: Salir"
     cv2.putText(frame, hint, (15, h - 16), FONT, 0.55, (200, 200, 200), 1, cv2.LINE_AA)
 
-def draw_summary(frame, game):
-    """Dibuja la pantalla de resumen de la sesión de juego."""
+def draw_summary(frame, game, high_scores):
+    # Dibuja la pantalla de resumen de la sesión de juego.
     h, w = frame.shape[:2]
     overlay = frame.copy()
     
@@ -77,16 +77,54 @@ def draw_summary(frame, game):
     if game.MODE == GameMode.GAME:
         lines.append(f"Mejor racha: {game.peak_streak}x")
 
-    lines.extend(["", "1: Libre | 2: Juego | 3: Salir"])
+    lines.extend(["", "MEJORES PUNTAJES:"])
+    if not high_scores:
+        lines.append("Aun no hay puntajes")
+    else:
+        for i, score_entry in enumerate(high_scores):
+            lines.append(f"{i+1}. {score_entry['name']} - {score_entry['score']} pts")
+
+    lines.extend(["", "Presiona una tecla para continuar..."])
 
     for i, line in enumerate(lines):
         y = y_start + 60 + i * 40
         color = WORD_COLOR if i == 0 else (220, 220, 220)
-        scale = 0.85 if i == 0 else 0.7
+        scale = 0.85 if i == 0 else 0.65
+        if "MEJORES PUNTAJES" in line:
+            scale = 0.7
         cv2.putText(frame, line, (x_start + 30, y), FONT, scale, color, 2 if i == 0 else 1, cv2.LINE_AA)
 
+def draw_high_scores_screen(frame, high_scores):
+    # Dibuja la pantalla de puntuaciones altas.
+    h, w = frame.shape[:2]
+    overlay = frame.copy()
+    
+    x_start, x_end = int(w * 0.2), int(w * 0.8)
+    y_start, y_end = int(h * 0.2), int(h * 0.8)
+    cv2.rectangle(overlay, (x_start, y_start), (x_end, y_end), (20, 20, 20), -1)
+    cv2.addWeighted(overlay, 0.8, frame, 0.2, 0, frame)
+
+    lines = ["MEJORES PUNTAJES"]
+    lines.extend(["", ""]) # Add some space
+
+    if not high_scores:
+        lines.append("Aun no hay puntajes")
+    else:
+        for i, score_entry in enumerate(high_scores):
+            lines.append(f"{i+1}. {score_entry['name']} - {score_entry['score']} pts")
+
+    lines.extend(["", "", "Presiona una tecla para volver al menu..."])
+
+    for i, line in enumerate(lines):
+        y = y_start + 60 + i * 45
+        color = STREAK_COLOR if i == 0 else (220, 220, 220)
+        scale = 1.0 if i == 0 else 0.7
+        text_size = cv2.getTextSize(line, FONT, scale, 2)[0]
+        cv2.putText(frame, line, (x_start + (x_end - x_start - text_size[0]) // 2, y), FONT, scale, color, 2 if i == 0 else 1, cv2.LINE_AA)
+
+
 def draw_difficulty_menu(frame):
-    """Dibuja el menú de selección de dificultad."""
+    # Dibuja el menú de selección de dificultad.
     h, w = frame.shape[:2]
     overlay = frame.copy()
     
@@ -108,8 +146,31 @@ def draw_difficulty_menu(frame):
         text_size = cv2.getTextSize(line, FONT, scale, 2)[0]
         cv2.putText(frame, line, (x_start + (x_end - x_start - text_size[0]) // 2, y), FONT, scale, color, 2 if i == 0 else 1, cv2.LINE_AA)
 
+def draw_name_input_screen(frame, current_name):
+    # Dibuja la pantalla para ingresar el nombre del jugador.
+    h, w = frame.shape[:2]
+    overlay = frame.copy()
+    
+    x_start, x_end = int(w * 0.2), int(w * 0.8)
+    y_start, y_end = int(h * 0.3), int(h * 0.7)
+    cv2.rectangle(overlay, (x_start, y_start), (x_end, y_end), (20, 20, 20), -1)
+    cv2.addWeighted(overlay, 0.8, frame, 0.2, 0, frame)
+
+    title = "¡NUEVO RECORD!"
+    prompt = "Ingresa tu nombre:"
+    
+    title_size = cv2.getTextSize(title, FONT, 1.2, 2)[0]
+    cv2.putText(frame, title, (x_start + (x_end - x_start - title_size[0]) // 2, y_start + 70), FONT, 1.2, STREAK_COLOR, 2, cv2.LINE_AA)
+
+    prompt_size = cv2.getTextSize(prompt, FONT, 0.8, 1)[0]
+    cv2.putText(frame, prompt, (x_start + (x_end - x_start - prompt_size[0]) // 2, y_start + 140), FONT, 0.8, WORD_COLOR, 1, cv2.LINE_AA)
+
+    # Simula un cursor parpadeante
+    cursor = "_" if int(time.time() * 2) % 2 == 0 else " "
+    cv2.putText(frame, f"{current_name}{cursor}", (x_start + 50, y_start + 200), FONT, 1, WORD_COLOR, 2, cv2.LINE_AA)
+
 def load_dependencies():
-    """Carga el modelo, el escalador y las etiquetas desde los archivos."""
+    # Carga el modelo, el escalador y las etiquetas desde los archivos.
     try:
         model = load_model(AI_MODEL_PATH)
         with open(LABELS_JSON_PATH, 'r') as f:
@@ -126,7 +187,7 @@ def load_dependencies():
         return None, None, None, None, False
 
 def process_prediction(landmarks, scaler, model, labels, is_lstm, sequence_buffer):
-    """Procesa los landmarks para obtener una predicción del modelo."""
+    # Procesa los landmarks para obtener una predicción del modelo.
     prediction_input = None
     if is_lstm:
         sequence_buffer.append(landmarks)
@@ -148,7 +209,7 @@ def process_prediction(landmarks, scaler, model, labels, is_lstm, sequence_buffe
     return None, 0.0
 
 def handle_stability(detected_letter, confidence, candidate_letter, stable_frames):
-    """Gestiona el contador de estabilidad para confirmar una seña y retorna el estado."""
+    # Gestiona el contador de estabilidad para confirmar una seña y retorna el estado.
     confirmed_letter = None
     status_text = ""
     color = COLOR_DANGER
@@ -177,13 +238,14 @@ def handle_stability(detected_letter, confidence, candidate_letter, stable_frame
     return candidate_letter, stable_frames, confirmed_letter, status_text, color
 
 def reset_prediction_state(tracker, is_lstm, sequence_buffer):
-    """Resets states related to prediction and tracking."""
+    # Reinicia los estados relacionados con la predicción y el seguimiento.
     tracker.reset_smoothing()
     if is_lstm and sequence_buffer is not None:
         sequence_buffer.clear()
-    return "", 0, "" # last_prediction, stable_frames, candidate_letter
+    return "", 0, ""
 
 def main():
+    # Función principal que ejecuta la aplicación.
     model, scaler, labels, available_letters, is_lstm = load_dependencies()
     if not model:
         return
@@ -198,20 +260,26 @@ def main():
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(window_name, 1024, 768)
 
-    # --- State Variables ---
-    app_state = "menu"  # "menu", "selecting_difficulty", "in_game", "summary"
+    # --- Variables de Estado de la Aplicación ---
+    # Gestiona el estado actual de la aplicación (menú, juego, resumen, etc.)
+    app_state = "menu"  # "menu", "selecting_difficulty", "in_game", "entering_name", "summary", "viewing_scores"
+    # Variables para la lógica de juego y predicción
     game_class_to_start = None
     last_prediction = ""
     stable_frames = 0
     candidate_letter = ""
+    high_scores = profile_manager.load_high_scores()
+    current_name = ""
+    final_score = 0
     status_text = "Iniciando..."
     color = COLOR_INFO
 
-    voice.speak("Sistema iniciado. Presiona 1 para Modo Libre, 2 para Modo Juego, o 3 para Salir.")
+    voice.speak("Sistema iniciado. Presiona 1 para Modo Libre, 2 para Modo Juego, 3 para ver Puntuaciones, o 4 para Salir.")
     time.sleep(2)
 
     frame_interval = 1.0 / FPS_LIMIT
 
+    # --- Bucle Principal de la Aplicación ---
     while cap.isOpened():
         start_time = time.time()
         success, frame = cap.read()
@@ -223,7 +291,9 @@ def main():
         wait_time = max(1, int((frame_interval - elapsed_time) * 1000))
         key = cv2.waitKey(wait_time) & 0xFF
 
-        # --- State Machine ---
+        # =================================================================
+        # --- Máquina de Estados: Gestiona la lógica según el estado actual ---
+        # =================================================================
         if app_state == "selecting_difficulty":
             draw_difficulty_menu(frame)
             if key != 255:
@@ -246,8 +316,37 @@ def main():
                     if game.MODE == GameMode.GAME:
                         voice.speak(f"Dificultad {difficulty}. Tu primera letra es {target}")
 
-        elif app_state in ["menu", "in_game", "summary"]:
-            if app_state != "summary":
+        elif app_state == "entering_name":
+            draw_name_input_screen(frame, current_name)
+            if key != 255:
+                if key == 8:  # Tecla de retroceso
+                    current_name = current_name[:-1]
+                elif key == 13:  # Tecla Enter
+                    if current_name:
+                        high_scores = profile_manager.add_high_score(current_name, final_score, high_scores)
+                        profile_manager.save_high_scores(high_scores)
+                        voice.speak(f"Puntaje de {current_name} guardado.")
+                        app_state = "summary"
+                elif 32 <= key <= 126 and len(current_name) < 10:  # Caracteres imprimibles
+                    current_name += chr(key).upper()
+
+        elif app_state == "summary":
+            draw_summary(frame, game, high_scores)
+            if key != 255:
+                app_state = "menu"
+                game = None
+                last_prediction, stable_frames, candidate_letter = reset_prediction_state(tracker, is_lstm, sequence_buffer)
+                voice.speak("Menu principal.")
+
+        elif app_state == "viewing_scores":
+            draw_high_scores_screen(frame, high_scores)
+            if key != 255:
+                app_state = "menu"
+                voice.speak("Menu principal.")
+
+
+        elif app_state in ["menu", "in_game"]: # Estados que requieren detección de mano
+            if app_state != "summary": # Evita procesar si ya está en resumen
                 landmarks = tracker.get_landmarks(tracker.find_hands(frame), smooth=True)
                 hand_confidence = tracker.get_hand_confidence()
 
@@ -268,11 +367,17 @@ def main():
                                     for v_msg in game.pending_voice: voice.speak(v_msg)
                                     game.pending_voice.clear()
                                 if not game.game_active:
-                                    app_state = "summary"
+                                    final_score = game.score
+                                    if profile_manager.is_high_score(final_score, high_scores):
+                                        app_state = "entering_name"
+                                        current_name = ""
+                                        voice.speak("Nuevo record. Ingresa tu nombre y presiona enter.")
+                                    else:
+                                        app_state = "summary"
                                     if not hasattr(game, 'pending_voice'): voice.speak(game_msg)
                             else: # Modo Libre
                                 voice.speak(confirmed)
-                            if is_lstm: sequence_buffer.clear()
+                            if is_lstm: sequence_buffer.clear() # Limpia buffer tras predicción
                     elif is_lstm:
                         status_text, color = f"Capturando... {len(sequence_buffer)}/{SEQUENCE_LENGTH}", COLOR_INFO
                 else:
@@ -282,18 +387,24 @@ def main():
             if app_state == "in_game" and game:
                 expired, msg = game.check_time()
                 if expired:
-                    status_text, app_state = msg, "summary"
+                    status_text = msg
+                    final_score = game.score
+                    if profile_manager.is_high_score(final_score, high_scores):
+                        app_state = "entering_name"
+                        current_name = ""
+                        voice.speak("Nuevo record. Ingresa tu nombre y presiona enter.")
+                    else:
+                        app_state = "summary"
+
                     if hasattr(game, 'pending_voice') and game.pending_voice:
                         for v_msg in game.pending_voice: voice.speak(v_msg)
                         game.pending_voice.clear()
                     else: voice.speak(msg)
 
             draw_hud(frame, status_text, color, game)
-            if app_state == "summary" and game:
-                draw_summary(frame, game)
 
             if key != 255:
-                if key == ord('3') or key == 27:
+                if key == ord('4') or key == 27:
                     break
                 elif key == ord('1'):
                     app_state = "menu"
@@ -305,6 +416,9 @@ def main():
                     game_class_to_start = SignGame
                     game = None
                     voice.speak("Selecciona la dificultad para el modo de juego.")
+                elif key == ord('3'):
+                    app_state = "viewing_scores"
+                    voice.speak("Mostrando mejores puntajes.")
 
         cv2.imshow(window_name, frame)
 
