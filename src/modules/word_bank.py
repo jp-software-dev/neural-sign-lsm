@@ -1,4 +1,4 @@
-"""Define el banco de palabras para los modos de juego, organizado por dificultad."""
+# Define el banco de palabras para los modos de juego, organizado por dificultad.
 WORD_BANK = {
     "facil": [
         "SOL", "MAR", "PAN", "LUZ", "PAZ", "FIN", "RED", "ROL", "OJO", "ALA", 
@@ -33,11 +33,11 @@ WORD_BANK = {
 ALL_WORDS = [w for words in WORD_BANK.values() for w in words]
 
 def get_words_by_difficulty(difficulty: str) -> list[str]:
-    """Devuelve una lista de palabras basada en el nivel de dificultad."""
+    # Devuelve una lista de palabras basada en el nivel de dificultad.
     if difficulty.lower() == "aleatorio":
         return ALL_WORDS
     return WORD_BANK.get(difficulty.lower(), ALL_WORDS)
 
 def get_all_words() -> list[str]:
-    """Devuelve una lista con todas las palabras disponibles."""
+    # Devuelve una lista con todas las palabras disponibles.
     return ALL_WORDS

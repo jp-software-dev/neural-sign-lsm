@@ -1,7 +1,5 @@
-"""
-Define el asistente de voz que opera de forma asíncrona en un hilo secundario
-para no bloquear la interfaz principal.
-"""
+# Define el asistente de voz que opera de forma asíncrona en un hilo secundario
+# para no bloquear la interfaz principal.
 import pyttsx3
 import threading
 import queue
@@ -9,14 +7,14 @@ import time
 from src.utils import app_logger
 
 class VoiceAssistant:
-    """Gestiona la síntesis de voz (TTS) usando una cola y un hilo de trabajo."""
+    # Gestiona la síntesis de voz (TTS) usando una cola y un hilo de trabajo.
     def __init__(self):
         self.speech_queue = queue.Queue()
         self._worker_thread = threading.Thread(target=self._speech_worker, daemon=True)
         self._worker_thread.start()
 
     def _speech_worker(self):
-        """Procesa la cola de texto a voz en un hilo separado para evitar bloqueos."""
+        # Procesa la cola de texto a voz en un hilo separado para evitar bloqueos.
         try:
             self.engine = pyttsx3.init()
             self.engine.setProperty('rate', 150)
@@ -44,7 +42,7 @@ class VoiceAssistant:
                 app_logger.error(f"Error del motor TTS durante la reproduccion: {str(e)}")
 
     def speak(self, text):
-        """Añade un texto a la cola para ser pronunciado por el asistente."""
+        # Añade un texto a la cola para ser pronunciado por el asistente.
         if self.speech_queue.qsize() > 2:
             with self.speech_queue.mutex:
                 self.speech_queue.queue.clear()
