@@ -4,58 +4,128 @@ from enum import Enum, auto
 
 from src.utils import app_logger
 from src.modules.word_bank import (
-    get_words_by_difficulty,
-    get_spelling_words_by_difficulty,
+    get_words_by_difficulty
 )
 
 # Definimos una estructura enumerada de tipado estricto para gestionar el enrutamiento contextual del ciclo de vida en la capa de orquestación principal
 class GameMode(Enum):
     NONE = auto()
-    SPEED = auto()      
-    SPELLING = auto()   
+    GAME = auto()
 
-class SpeedGame:
-    # Vinculamos la clase al identificador de enrutamiento estático correspondiente
-    MODE = GameMode.SPEED
-
+class BaseGame:
+    """Clase base para todos los modos de juego."""
+    
     def __init__(self, available_letters: list[str], difficulty: str = "facil"):
-        # Estandarizamos el espacio de clases viables forzando una codificación en mayúsculas para homogeneizar el pipeline de evaluación
         self.available_letters = [l.upper() for l in available_letters]
         self.difficulty = difficulty
-
-        # Inicializamos los escalares de estado que determinan la heurística de progreso de la sesión activa
+        
+        # Estado del juego
         self.score: int = 0
-        self.streak: int = 0
-        # Persistimos el valor máximo del multiplicador temporal para la generación del reporte analítico post-sesión
-        self.peak_streak: int = 0          
         self.game_active: bool = False
         self.start_time: float = 0.0
-        self.time_limit: int = 60
+        self.time_limit: int = 60  # Default, puede ser sobreescrito
 
-        # Mantenemos las referencias a los punteros de iteración del corpus de caracteres y strings
+        # Estado de la palabra
         self.target_word: str = ""
         self.target_letter: str = ""
         self._letter_index: int = 0
         self._words_completed: int = 0
         self._word_pool: list[str] = []
 
-    def start_game(self, difficulty: str | None = None) -> str:
-        """
-        Ejecuta la secuencia de arranque de la máquina de estados, purgando los vectores de sesión residuales y estableciendo el tiempo cero absoluto.
-        Retorna el primer objetivo escalar para la inicialización del renderizado.
-        """
+    def start_game(self, difficulty: str | None = None):
+        """Lógica base para iniciar o reiniciar un juego."""
         if difficulty:
             self.difficulty = difficulty
 
         self.score = 0
-        self.streak = 0
-        self.peak_streak = 0
         self._words_completed = 0
         self.game_active = True
         self.start_time = time.time()
 
         self._build_word_pool()
         self._pick_new_word()
+
+    def check_time(self) -> tuple[bool, str]:
+        """Verifica si el tiempo de juego ha expirado."""
+        if not self.game_active:
+            return False, ""
+        if self.time_left <= 0:
+            self.game_active = False
+            return True, f"¡Tiempo! Puntuación: {self.score} | Palabras: {self._words_completed}"
+        return False, ""
+
+    def check_prediction(self, predicted_letter: str) -> tuple[bool, str]:
+        """Método abstracto para ser implementado por las subclases."""
+        raise NotImplementedError("Las subclases deben implementar check_prediction.")
+
+    @property
+    def time_left(self) -> int:
+        """Calcula el tiempo restante en segundos."""
+        if not self.game_active:
+            return 0
+        return max(0, int(self.time_limit - (time.time() - self.start_time)))
+
+    @property
+    def progress_display(self) -> str:
+        """Genera la cadena de texto que muestra el progreso en la palabra actual."""
+        return self._build_progress_display()
+
+    @property
+    def words_completed(self) -> int:
+        """Retorna el número de palabras completadas."""
+        return self._words_completed
+
+    def _build_word_pool(self):
+        """Método abstracto para construir el banco de palabras."""
+        raise NotImplementedError("Las subclases deben implementar _build_word_pool.")
+
+    def _pick_new_word(self):
+        """Elige una nueva palabra del pool y resetea el índice."""
+        self.target_word = random.choice(self._word_pool).upper()
+        self._letter_index = 0
+        self.target_letter = self.target_word[0]
+
+    def _advance_letter(self) -> bool:
+        """Avanza a la siguiente letra de la palabra. Retorna True si la palabra terminó."""
+        self._letter_index += 1
+        if self._letter_index >= len(self.target_word):
+            return True
+        self.target_letter = self.target_word[self._letter_index]
+        return False
+
+    def _build_progress_display(self) -> str:
+        """Construye la representación visual del progreso de la palabra."""
+        chars = []
+        for i, ch in enumerate(self.target_word):
+            if i < self._letter_index:
+                chars.append(ch)
+            elif i == self._letter_index:
+                chars.append(f"[{ch}]")
+            else:
+                chars.append("_")
+        return " ".join(chars)
+
+
+class SignGame(BaseGame):
+    # Vinculamos la clase al identificador de enrutamiento estático correspondiente
+    MODE = GameMode.GAME
+
+    def __init__(self, available_letters: list[str], difficulty: str = "facil"):
+        super().__init__(available_letters, difficulty)
+        # Inicializamos los escalares de estado que determinan la heurística de progreso de la sesión activa
+        self.streak: int = 0
+        # Persistimos el valor máximo del multiplicador temporal para la generación del reporte analítico post-sesión
+        self.peak_streak: int = 0          
+        self.time_limit: int = 60
+
+    def start_game(self, difficulty: str | None = None) -> str:
+        """
+        Ejecuta la secuencia de arranque de la máquina de estados, purgando los vectores de sesión residuales y estableciendo el tiempo cero absoluto.
+        Retorna el primer objetivo escalar para la inicialización del renderizado.
+        """
+        super().start_game(difficulty)
+        self.streak = 0
+        self.peak_streak = 0
         return self.target_letter
 
     def check_time(self) -> tuple[bool, str]:
@@ -105,20 +175,6 @@ class SpeedGame:
             progress = self._build_progress_display()
             return False, f"{progress} | Pts:{self.score} | {self.time_left}s"
 
-    @property
-    def time_left(self) -> int:
-        if not self.game_active:
-            return 0
-        return max(0, int(self.time_limit - (time.time() - self.start_time)))
-
-    @property
-    def progress_display(self) -> str:
-        return self._build_progress_display()
-
-    @property
-    def words_completed(self) -> int:
-        return self._words_completed
-
     def _build_word_pool(self):
         raw = get_words_by_difficulty(self.difficulty)
         # Filtramos la matriz de palabras limitándola estrictamente a la intersección con el subconjunto de clases soportadas por el modelo local
@@ -130,34 +186,7 @@ class SpeedGame:
             # Implementamos una estrategia de degradación elegante (fallback) para garantizar la continuidad del flujo de ejecución ante un corpus estructuralmente insuficiente
             self._word_pool = self.available_letters[:10] or ["A"]
 
-    def _pick_new_word(self):
-        self.target_word = random.choice(self._word_pool).upper()
-        self._letter_index = 0
-        self.target_letter = self.target_word[0]
-
-    def _advance_letter(self) -> bool:
-        self._letter_index += 1
-        if self._letter_index >= len(self.target_word):
-            return True
-        self.target_letter = self.target_word[self._letter_index]
-        return False
-
-    def _build_progress_display(self) -> str:
-        """
-        Ensamblamos dinámicamente la representación en cadena del buffer de progreso espacial, inyectando delimitadores de formato para resaltar la posición actual del puntero léxico.
-        """
-        chars = []
-        for i, ch in enumerate(self.target_word):
-            if i < self._letter_index:
-                chars.append(ch)           # Segmento de inferencia validado positivamente
-            elif i == self._letter_index:
-                chars.append(f"[{ch}]")    # Foco activo del subsistema de evaluación
-            else:
-                chars.append("_")          # Segmento de inferencia pendiente de evaluación
-        return " ".join(chars)
-
-
-class SpellingGame:
+class SpellingGame(BaseGame):
     """
     Arquitectura de evaluación guiada por retroalimentación acústica.
     El módulo orquesta un pipeline de dictado mediante un subsistema Text-To-Speech (TTS), requiriendo validación secuencial del árbol léxico por parte del motor de visión por computadora.
@@ -167,24 +196,12 @@ class SpellingGame:
     MODE = GameMode.SPELLING
 
     def __init__(self, available_letters: list[str], difficulty: str = "facil"):
-        self.available_letters = [l.upper() for l in available_letters]
-        self.difficulty = difficulty
-
-        # Variables de estado globales para el control del bucle lógico y el delta de temporización de la sesión
-        self.score: int = 0
-        self.game_active: bool = False
-        self.start_time: float = 0.0
+        super().__init__(available_letters, difficulty)
         self.time_limit: int = 120          
 
-        # Controladores de la ventana deslizante para el seguimiento de la convergencia de la cadena de caracteres
-        self.target_word: str = ""
-        self.target_letter: str = ""
-        self._letter_index: int = 0
-        self._words_completed: int = 0
+        # Estado específico de SpellingGame
         self._errors_in_word: int = 0      
         self._total_errors: int = 0        
-        self._word_pool: list[str] = []
-
         # Estructuramos un buffer FIFO asíncrono para delegar el consumo de cargas útiles de audio al hilo principal del sistema operativo
         self.pending_voice: list[str] = []
 
@@ -192,18 +209,8 @@ class SpellingGame:
         """
         Desencadena la inicialización de la matriz de contexto, poblando el buffer de audio inicial para la orquestación del evento de apertura del sistema TTS.
         """
-        if difficulty:
-            self.difficulty = difficulty
-
-        self.score = 0
-        self._words_completed = 0
+        super().start_game(difficulty)
         self._total_errors = 0
-        self.game_active = True
-        self.start_time = time.time()
-
-        self._build_word_pool()
-        self._pick_new_word()
-
         # Inyectamos el flujo de configuración acústica en el buffer de salida
         self.pending_voice = [
             f"Juego de deletreo.",
@@ -213,9 +220,6 @@ class SpellingGame:
         return self.target_word
 
     def check_time(self) -> tuple[bool, str]:
-        """
-        Poller de interrupción temporal diseñado para desencadenar el volcado final de estados si el umbral del hardware de reloj de la máquina excede la tolerancia definida.
-        """
         if not self.game_active:
             return False, ""
         if self.time_left <= 0:
@@ -232,10 +236,6 @@ class SpellingGame:
         return False, ""
 
     def check_prediction(self, predicted_letter: str) -> tuple[bool, str]:
-        """
-        Compara la salida probabilística del modelo contra el nodo léxico activo. 
-        Actualiza el estado asíncrono del sistema y repuebla el buffer de síntesis de voz (pending_voice) basándose en la tasa de falsos positivos detectada.
-        """
         # Purgamos la cola de eventos acústicos de la iteración previa
         self.pending_voice = []
 
@@ -281,20 +281,6 @@ class SpellingGame:
             return False, f"Error. {progress} | {self.time_left}s"
 
     @property
-    def time_left(self) -> int:
-        if not self.game_active:
-            return 0
-        return max(0, int(self.time_limit - (time.time() - self.start_time)))
-
-    @property
-    def progress_display(self) -> str:
-        return self._build_progress_display()
-
-    @property
-    def words_completed(self) -> int:
-        return self._words_completed
-
-    @property
     def total_errors(self) -> int:
         return self._total_errors
 
@@ -308,32 +294,8 @@ class SpellingGame:
             self._word_pool = self.available_letters[:5] or ["SOL"]
 
     def _pick_new_word(self):
-        self.target_word = random.choice(self._word_pool).upper()
-        self._letter_index = 0
-        self.target_letter = self.target_word[0]
+        super()._pick_new_word()
         self._errors_in_word = 0
-
-    def _advance_letter(self) -> bool:
-        self._letter_index += 1
-        if self._letter_index >= len(self.target_word):
-            return True
-        self.target_letter = self.target_word[self._letter_index]
-        return False
-
-    def _build_progress_display(self) -> str:
-        """
-        Replicamos la lógica de renderizado matricial de SpeedGame, inyectando marcadores visuales para el seguimiento unívoco de la secuencia de validación actual.
-        """
-        chars = []
-        for i, ch in enumerate(self.target_word):
-            if i < self._letter_index:
-                chars.append(ch)
-            elif i == self._letter_index:
-                chars.append(f"[{ch}]")
-            else:
-                chars.append("_")
-        return " ".join(chars)
-
 
 # Preservamos el descriptor histórico SignGame delegando su instanciación dinámicamente hacia la estructura actualizada SpeedGame para garantizar la compatibilidad hacia atrás.
 SignGame = SpeedGame
