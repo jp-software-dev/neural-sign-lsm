@@ -13,6 +13,43 @@ def ensure_dir(file_path):
         os.makedirs(directory)
         print(f"[INFO] Folder created: {directory}")
 
+def show_reference_image(frame, label, size=180):
+    """
+    Carga y superpone una imagen de referencia de la seña en la esquina superior derecha.
+    Asume que las imágenes están en 'data/reference_images/' y se llaman 'A.png', 'B.png', etc.
+    """
+    reference_dir = os.path.join("data", "reference_images")
+    img_path = os.path.join(reference_dir, f"{label}.png")
+
+    if not os.path.exists(img_path):
+        cv2.putText(frame, "No ref.", (frame.shape[1] - 85, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
+        return
+
+    ref_img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
+    if ref_img is None:
+        return
+
+    # Redimensionar manteniendo la proporción
+    h, w = ref_img.shape[:2]
+    scale = size / h
+    new_w, new_h = int(w * scale), size
+    ref_img = cv2.resize(ref_img, (new_w, new_h))
+
+    # Posición en la esquina superior derecha
+    x_offset = frame.shape[1] - new_w - 10
+    y_offset = 10
+
+    # Superponer con canal alfa (transparencia)
+    if ref_img.shape[2] == 4:
+        alpha_s = ref_img[:, :, 3] / 255.0
+        alpha_l = 1.0 - alpha_s
+        for c in range(0, 3):
+            frame[y_offset:y_offset+new_h, x_offset:x_offset+new_w, c] = \
+                (alpha_s * ref_img[:, :, c] + alpha_l * frame[y_offset:y_offset+new_h, x_offset:x_offset+new_w, c])
+    else: # Si no hay canal alfa
+        frame[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = ref_img
+
 def save_data(label, landmarks):
     try:
         ensure_dir(LANDMARKS_CSV_PATH)
@@ -125,6 +162,7 @@ def main():
             landmarks = tracker.get_landmarks(smooth=True)
 
             if last_detected_label:
+                show_reference_image(frame, last_detected_label)
                 cv2.putText(frame, f"Current letter: {last_detected_label}", (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
             else:
