@@ -26,4 +26,4 @@ Follow these steps to deploy the project locally:
 
 1. Clone the repository:
    ```bash
-   git clone [https://github.com/jp-software-dev/NeuralSign-LSM.git](https://github.com/jp-software-dev/NeuralSign-LSM.git)
+   git clone https://github.com/jp-software-dev/neural-sign-lsm.git
