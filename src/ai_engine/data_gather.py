@@ -1,3 +1,6 @@
+# Script para la recolección de datos de señas.
+# Permite capturar landmarks de manos para señas estáticas y secuencias de movimiento,
+# guardándolos en formato CSV o NPY para el posterior entrenamiento del modelo.
 import cv2
 import csv
 import os
@@ -8,16 +11,15 @@ from src.utils import app_logger
 from src.ai_engine.hand_tracking import HandTracker
 
 def ensure_dir(file_path):
+    # Asegura que el directorio para un archivo dado exista.
     directory = os.path.dirname(file_path)
     if not os.path.exists(directory):
         os.makedirs(directory)
         print(f"[INFO] Folder created: {directory}")
 
 def show_reference_image(frame, label, size=180):
-    """
-    Carga y superpone una imagen de referencia de la seña en la esquina superior derecha.
-    Asume que las imágenes están en 'data/reference_images/' y se llaman 'A.png', 'B.png', etc.
-    """
+    # Carga y superpone una imagen de referencia de la seña en la esquina superior derecha.
+    # Asume que las imágenes están en 'data/reference_images/' y se llaman 'A.png', 'B.png', etc.
     reference_dir = os.path.join("data", "reference_images")
     img_path = os.path.join(reference_dir, f"{label}.png")
 
@@ -51,6 +53,7 @@ def show_reference_image(frame, label, size=180):
         frame[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = ref_img
 
 def save_data(label, landmarks):
+    # Guarda una única muestra de landmarks (fila) en el archivo CSV.
     try:
         ensure_dir(LANDMARKS_CSV_PATH)
         if not landmarks or len(landmarks) != 63:
@@ -67,6 +70,7 @@ def save_data(label, landmarks):
         return False
 
 def auto_capture(tracker, cap, label, num_samples=500, delay=0.0):
+    # Captura automáticamente un número definido de muestras estáticas.
     captured = 0
     for i in range(num_samples):
         ret, frame = cap.read()
@@ -89,6 +93,7 @@ def auto_capture(tracker, cap, label, num_samples=500, delay=0.0):
     print(f"Auto capture finished. Saved {captured} samples for {label}.\n")
 
 def save_sequence(label, sequence):
+    # Guarda una secuencia de landmarks en un archivo .npy.
     seq_dir = os.path.join("data", "sequences", label)
     os.makedirs(seq_dir, exist_ok=True)
     timestamp = int(time.time() * 1000)
@@ -97,6 +102,7 @@ def save_sequence(label, sequence):
     print(f"[OK] Sequence saved to {filename}")
 
 def record_sequence(tracker, cap, label, seq_len=30):
+    # Graba una secuencia de movimiento de una longitud definida.
     print(f"Recording sequence for {label}")
     buffer = []
     print("Preparing... 3")
@@ -131,6 +137,7 @@ def record_sequence(tracker, cap, label, seq_len=30):
         print("Incomplete sequence, not saved")
 
 def main():
+    # Función principal para ejecutar el script de recolección de datos.
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("Error: Cannot open camera")
@@ -141,6 +148,7 @@ def main():
     tracker = HandTracker(ema_alpha=0.25)
     last_detected_label = None
 
+    # --- Instrucciones de Uso ---
     print("Camera ready. Instructions:")
     print("  - Press a LOWERCASE letter (a-z) to set the current letter (e.g., 'a').")
     print("  - Then use UPPERCASE letters for actions:")
@@ -150,6 +158,7 @@ def main():
     print("      [Q] Quit")
 
     try:
+        # --- Bucle Principal de Captura ---
         while True:
             ret, frame = cap.read()
             if not ret:
@@ -161,6 +170,7 @@ def main():
             frame = tracker.draw_hands(frame)
             landmarks = tracker.get_landmarks(smooth=True)
 
+            # --- Renderizado de Información en Pantalla (HUD) ---
             if last_detected_label:
                 show_reference_image(frame, last_detected_label)
                 cv2.putText(frame, f"Current letter: {last_detected_label}", (10, 30),
@@ -174,10 +184,12 @@ def main():
 
             cv2.imshow("NeuralSign-LSM : Data Gathering", frame)
 
+            # --- Manejo de Teclas ---
             key = cv2.waitKey(1) & 0xFF
             if key == 255:
                 continue
 
+            # Acciones basadas en la tecla presionada
             if key == ord('Q') or key == 27:
                 break
             elif key == ord('C'):

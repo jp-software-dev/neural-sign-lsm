@@ -1,4 +1,4 @@
-# Definimos un diccionario estático en memoria para mapear la clasificación de complejidad algorítmica hacia vectores contiguos de cadenas de caracteres
+"""Define el banco de palabras para los modos de juego, organizado por dificultad."""
 WORD_BANK = {
     "facil": [
         "SOL", "MAR", "PAN", "LUZ", "PAZ", "FIN", "RED", "ROL", "OJO", "ALA", 
@@ -30,31 +30,14 @@ WORD_BANK = {
     ],
 }
 
-# Estructuramos un grafo tipado de corpus léxico idéntico para el motor de deletreo (TTS)
-SPELLING_WORDS: dict[str, list[str]] = {
-    "facil": WORD_BANK["facil"].copy(),
-    "medio": WORD_BANK["medio"].copy(),
-    "dificil": WORD_BANK["dificil"].copy(),
-}
-
-# Aplicamos una transformación de aplanamiento iterativo sobre las matrices multidimensionales del corpus para generar un espacio de búsqueda unidimensional global
 ALL_WORDS = [w for words in WORD_BANK.values() for w in words]
-ALL_SPELLING_WORDS: list[str] = [w for words in SPELLING_WORDS.values() for w in words]
 
 def get_words_by_difficulty(difficulty: str) -> list[str]:
-    # Interroga la estructura de datos léxica permitiendo extracción aleatoria total
+    """Devuelve una lista de palabras basada en el nivel de dificultad."""
     if difficulty.lower() == "aleatorio":
         return ALL_WORDS
     return WORD_BANK.get(difficulty.lower(), ALL_WORDS)
 
-def get_spelling_words_by_difficulty(difficulty: str) -> list[str]:
-    # Expone una interfaz de consulta determinista para extraer particiones de deletreo
-    if difficulty.lower() == "aleatorio":
-        return ALL_SPELLING_WORDS
-    return SPELLING_WORDS.get(difficulty.lower(), ALL_SPELLING_WORDS)
-
 def get_all_words() -> list[str]:
+    """Devuelve una lista con todas las palabras disponibles."""
     return ALL_WORDS
-
-def get_all_spelling_words() -> list[str]:
-    return ALL_SPELLING_WORDS
