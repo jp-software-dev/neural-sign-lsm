@@ -15,7 +15,7 @@ class BaseGame:
     # Define la estructura y comportamiento base para todos los juegos.
 
     def __init__(self, available_letters: list[str], difficulty: str = "facil"):
-        self.available_letters = [l.upper() for l in available_letters]
+        self.available_letters = {l.upper() for l in available_letters}
         self.difficulty = difficulty
 
         # --- Estado del Juego ---

@@ -26,16 +26,24 @@ STREAK_COLOR = (0, 255, 255)
 WORD_COLOR = (255, 255, 255)
 PROGRESS_COLOR = (180, 255, 180)
 
-def draw_hud(frame, status_text, color, game):
+def draw_hud(frame, status_text, color, game, debug_info=None):
     # Dibuja el HUD principal con el estado actual y la información del juego.
     h, w = frame.shape[:2]
-    overlay = frame.copy()
     
     bar_height = 105 if (game and game.game_active) else 45
-    cv2.rectangle(overlay, (0, 0), (w, bar_height), HUD_BG_COLOR, -1)
-    cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+    # Optimización: Se opera sobre una Región de Interés (ROI) para evitar copiar el frame completo.
+    hud_roi = frame[0:bar_height, 0:w]
+    overlay_roi = np.full(hud_roi.shape, HUD_BG_COLOR, dtype=np.uint8)
+    cv2.addWeighted(hud_roi, 0.4, overlay_roi, 0.6, 0, hud_roi)
     
     cv2.putText(frame, status_text, (15, 30), FONT, 0.8, color, 2, cv2.LINE_AA)
+
+    # Dibuja información de depuración, como el alpha dinámico
+    if debug_info:
+        alpha_text = f"Alpha: {debug_info.get('alpha', 0.0):.2f}"
+        text_size = cv2.getTextSize(alpha_text, FONT, 0.55, 1)[0]
+        cv2.putText(frame, alpha_text, (w - text_size[0] - 15, 30), FONT, 0.55, (200, 200, 200), 1, cv2.LINE_AA)
+
 
     if game and game.game_active:
         progress = game.progress_display
@@ -61,15 +69,15 @@ def draw_hud(frame, status_text, color, game):
 def draw_summary(frame, game, high_scores):
     # Dibuja la pantalla de resumen al finalizar una partida.
     h, w = frame.shape[:2]
-    overlay = frame.copy()
     
     x_start = int(w * 0.15)
     x_end = int(w * 0.85)
     y_start = int(h * 0.15)
     y_end = int(h * 0.85)
-    cv2.rectangle(overlay, (x_start, y_start), (x_end, y_end), (20, 20, 20), -1)
-    cv2.addWeighted(overlay, 0.8, frame, 0.2, 0, frame)
-
+    # Optimización: Se opera sobre una ROI para el efecto de transparencia.
+    summary_roi = frame[y_start:y_end, x_start:x_end]
+    overlay_roi = np.full(summary_roi.shape, (20, 20, 20), dtype=np.uint8)
+    cv2.addWeighted(summary_roi, 0.2, overlay_roi, 0.8, 0, summary_roi)
     lines = [
         "SESION TERMINADA",
         f"Puntuacion: {game.score} pts",
@@ -98,13 +106,14 @@ def draw_summary(frame, game, high_scores):
 def draw_high_scores_screen(frame, high_scores):
     # Dibuja la pantalla que muestra los mejores puntajes guardados.
     h, w = frame.shape[:2]
-    overlay = frame.copy()
     
     x_start, x_end = int(w * 0.2), int(w * 0.8)
     y_start, y_end = int(h * 0.2), int(h * 0.8)
-    cv2.rectangle(overlay, (x_start, y_start), (x_end, y_end), (20, 20, 20), -1)
-    cv2.addWeighted(overlay, 0.8, frame, 0.2, 0, frame)
-
+    # Optimización: Se opera sobre una ROI para el efecto de transparencia.
+    scores_roi = frame[y_start:y_end, x_start:x_end]
+    overlay_roi = np.full(scores_roi.shape, (20, 20, 20), dtype=np.uint8)
+    cv2.addWeighted(scores_roi, 0.2, overlay_roi, 0.8, 0, scores_roi)
+    
     lines = ["MEJORES PUNTAJES"]
     lines.extend(["", ""])
 
@@ -127,15 +136,15 @@ def draw_high_scores_screen(frame, high_scores):
 def draw_difficulty_menu(frame):
     # Dibuja la pantalla para que el usuario seleccione la dificultad del juego.
     h, w = frame.shape[:2]
-    overlay = frame.copy()
     
     x_start = int(w * 0.2)
     x_end = int(w * 0.8)
     y_start = int(h * 0.2)
     y_end = int(h * 0.8)
-    cv2.rectangle(overlay, (x_start, y_start), (x_end, y_end), (20, 20, 20), -1)
-    cv2.addWeighted(overlay, 0.8, frame, 0.2, 0, frame)
-
+    # Optimización: Se opera sobre una ROI para el efecto de transparencia.
+    menu_roi = frame[y_start:y_end, x_start:x_end]
+    overlay_roi = np.full(menu_roi.shape, (20, 20, 20), dtype=np.uint8)
+    cv2.addWeighted(menu_roi, 0.2, overlay_roi, 0.8, 0, menu_roi)
     lines = [
         "SELECCIONA LA DIFICULTAD", "1: Facil", "2: Medio", "3: Dificil",
         "4: Aleatorio", "", "5: Volver"
@@ -150,13 +159,14 @@ def draw_difficulty_menu(frame):
 def draw_name_input_screen(frame, current_name):
     # Dibuja la pantalla para que el usuario ingrese su nombre tras un nuevo récord.
     h, w = frame.shape[:2]
-    overlay = frame.copy()
     
     x_start, x_end = int(w * 0.2), int(w * 0.8)
     y_start, y_end = int(h * 0.2), int(h * 0.8)
-    cv2.rectangle(overlay, (x_start, y_start), (x_end, y_end), (20, 20, 20), -1)
-    cv2.addWeighted(overlay, 0.8, frame, 0.2, 0, frame)
-
+    # Optimización: Se opera sobre una ROI para el efecto de transparencia.
+    input_roi = frame[y_start:y_end, x_start:x_end]
+    overlay_roi = np.full(input_roi.shape, (20, 20, 20), dtype=np.uint8)
+    cv2.addWeighted(input_roi, 0.2, overlay_roi, 0.8, 0, input_roi)
+    
     title = "NUEVO RECORD"
     prompt = "Ingresa tu nombre:"
     
@@ -172,13 +182,14 @@ def draw_name_input_screen(frame, current_name):
 def draw_delete_confirmation_screen(frame):
     # Dibuja la pantalla de confirmación para borrar puntajes.
     h, w = frame.shape[:2]
-    overlay = frame.copy()
     
     x_start, x_end = int(w * 0.2), int(w * 0.8)
     y_start, y_end = int(h * 0.2), int(h * 0.8)
-    cv2.rectangle(overlay, (x_start, y_start), (x_end, y_end), (0, 0, 40), -1)
-    cv2.addWeighted(overlay, 0.8, frame, 0.2, 0, frame)
-
+    # Optimización: Se opera sobre una ROI para el efecto de transparencia.
+    confirm_roi = frame[y_start:y_end, x_start:x_end]
+    overlay_roi = np.full(confirm_roi.shape, (0, 0, 40), dtype=np.uint8)
+    cv2.addWeighted(confirm_roi, 0.2, overlay_roi, 0.8, 0, confirm_roi)
+    
     lines = [
         "¿BORRAR PUNTAJES?",
         "Esta accion no se puede deshacer.",
@@ -196,10 +207,10 @@ def draw_delete_confirmation_screen(frame):
 def draw_countdown_screen(frame, text):
     # Dibuja la pantalla de cuenta atrás.
     h, w = frame.shape[:2]
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
-    cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
-
+    # Optimización: Se opera sobre una ROI (en este caso, todo el frame) para el efecto de transparencia.
+    overlay = np.full(frame.shape, (0, 0, 0), dtype=np.uint8)
+    cv2.addWeighted(frame, 0.4, overlay, 0.6, 0, frame)
+    
     font_scale = 6.0
     thickness = 15
     text_size = cv2.getTextSize(text, FONT, font_scale, thickness)[0]
@@ -211,10 +222,10 @@ def draw_countdown_screen(frame, text):
 def draw_pause_screen(frame):
     # Dibuja la pantalla de pausa.
     h, w = frame.shape[:2]
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
-    cv2.addWeighted(overlay, 0.7, frame, 0.4, 0, frame)
-
+    # Optimización: Se opera sobre una ROI (todo el frame) para el efecto de transparencia.
+    overlay = np.full(frame.shape, (0, 0, 0), dtype=np.uint8)
+    cv2.addWeighted(frame, 0.4, overlay, 0.7, 0, frame)
+    
     text = "PAUSA"
     font_scale = 3.0
     thickness = 8
@@ -259,7 +270,9 @@ def process_prediction(landmarks, scaler, model, labels, is_lstm, sequence_buffe
         prediction_input = scaler.transform(raw_data)
 
     if prediction_input is not None:
-        prediction = model.predict(prediction_input, verbose=0)
+        # Optimización: Llamar al modelo directamente es más rápido para inferencia en tiempo real que model.predict().
+        prediction_tensor = model(prediction_input, training=False)
+        prediction = prediction_tensor.numpy()
         confidence = float(np.max(prediction))
         class_index = int(np.argmax(prediction))
         detected_letter = labels.get(class_index, "?")
@@ -310,7 +323,7 @@ def main():
         return
 
     sound_manager.init()
-    tracker = HandTracker(ema_alpha=0.3)
+    tracker = HandTracker(ema_alpha=0.2)
     voice = VoiceAssistant()
     sequence_buffer = deque(maxlen=SEQUENCE_LENGTH) if is_lstm else None
     
@@ -339,6 +352,7 @@ def main():
     frame_interval = 1.0 / FPS_LIMIT
 
     while cap.isOpened():
+        timestamp_ms = int(time.time() * 1000)
         start_time = time.time()
         success, frame = cap.read()
         if not success:
@@ -443,7 +457,7 @@ def main():
                 voice.speak("Puntajes borrados.")
             elif key != 255 and key != ord('s'):
                 app_state = "viewing_scores"
-
+        
         elif app_state == "paused":
             draw_hud(frame, "PAUSA", COLOR_INFO, game)
             draw_pause_screen(frame)
@@ -451,11 +465,15 @@ def main():
                 app_state = "in_game"
                 if game: game.resume()
                 voice.speak("Juego reanudado.")
-
+        
         elif app_state in ["menu", "in_game"]:
             if app_state != "summary":
-                landmarks = tracker.get_landmarks(tracker.find_hands(frame), smooth=True)
+                tracker.process_frame_async(frame, timestamp_ms)
+                landmarks = tracker.get_landmarks(smooth=True)
                 hand_confidence = tracker.get_hand_confidence()
+                
+                # Recopila información de depuración para el HUD
+                debug_info = {'alpha': tracker.get_last_dynamic_alpha()}
 
                 if landmarks and hand_confidence > 0.4:
                     tracker.draw_landmarks(frame, landmarks)
@@ -513,7 +531,7 @@ def main():
 
                     voice.speak(msg)
 
-            draw_hud(frame, status_text, color, game)
+            draw_hud(frame, status_text, color, game, debug_info)
 
             if key != 255:
                 if key == ord('p') and app_state == "in_game" and game:

@@ -4,6 +4,7 @@ import numpy as np
 import mediapipe as mp
 from mediapipe.tasks.python import vision
 from mediapipe.tasks.python.core.base_options import BaseOptions
+import threading
 from src.config.settings import MP_DETECTION_CONFIDENCE, MP_TRACKING_CONFIDENCE
 
 HAND_CONNECTIONS = [
@@ -25,45 +26,50 @@ HAND_CONNECTIONS = [
 class HandTracker:
     # Clase para detectar landmarks de una mano en un frame de video,
     # aplicar un filtro de suavizado y dibujar los resultados.
-    def __init__(self, ema_alpha=0.25):
-        # --- Configuración del Detector de MediaPipe ---
+    def __init__(self, ema_alpha=0.2):
+        self.latest_results = None
+        self.lock = threading.Lock()
+
+        def result_callback(result: vision.HandLandmarkerResult, output_image: mp.Image, timestamp_ms: int):
+            with self.lock:
+                self.latest_results = result
+
         model_path = "hand_landmarker.task"
         base_options = BaseOptions(model_asset_path=model_path)
         options = vision.HandLandmarkerOptions(
             base_options=base_options,
+            running_mode=vision.RunningMode.LIVE_STREAM,
             num_hands=1,
             min_hand_detection_confidence=MP_DETECTION_CONFIDENCE,
             min_hand_presence_confidence=MP_TRACKING_CONFIDENCE,
             min_tracking_confidence=MP_TRACKING_CONFIDENCE,
+            result_callback=result_callback,
         )
         self.detector = vision.HandLandmarker.create_from_options(options)
-        self.results = None
 
         # --- Configuración del Filtro de Suavizado (EMA) ---
-        self.ema_alpha = ema_alpha
+        self.base_ema_alpha = ema_alpha
         self.prev_smoothed_landmarks = None
         self.consecutive_no_hand = 0
+        self.prev_raw_landmarks = None
+        self.last_dynamic_alpha = ema_alpha
 
-    def find_hands(self, frame):
-        # Procesa un frame de video para detectar manos.
-        # Los resultados se guardan en `self.results`.
+    def process_frame_async(self, frame, timestamp_ms: int):
+        # Procesa un frame de video para detectar manos de forma asíncrona.
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-        self.results = self.detector.detect(mp_image)
-        return self.results
-
-    def process_frame(self, frame):
-        # Alias de `find_hands` para compatibilidad con otros módulos.
-        return self.find_hands(frame)
+        self.detector.detect_async(mp_image, timestamp_ms)
 
     # Landmarks
-    def get_landmarks(self, results=None, smooth=True):
+    def get_landmarks(self, smooth=True):
         # Extrae las coordenadas de los landmarks de la mano detectada.
         # Aplica un filtro de suavizado (Media Móvil Exponencial) si está activado.
-        target_results = results if results is not None else self.results
+        with self.lock:
+            target_results = self.latest_results
 
         if not target_results or not target_results.hand_landmarks:
             self.prev_smoothed_landmarks = None
+            self.prev_raw_landmarks = None
             self.consecutive_no_hand += 1
             return []
 
@@ -72,29 +78,56 @@ class HandTracker:
         current_raw = [coord for lm in hand for coord in (lm.x, lm.y, lm.z)]
 
         if not smooth:
+            self.prev_raw_landmarks = current_raw
             return current_raw
+
+        # --- Cálculo Dinámico de Alpha ---
+        dynamic_alpha = self.base_ema_alpha
+        if self.prev_raw_landmarks is not None:
+            # Calcula la velocidad basándose en el desplazamiento del landmark de la muñeca (índice 0)
+            wrist_current = np.array(current_raw[0:3])
+            wrist_prev = np.array(self.prev_raw_landmarks[0:3])
+            velocity = np.linalg.norm(wrist_current - wrist_prev)
+
+            # Mapea la velocidad a alpha. Estos valores se pueden ajustar.
+            # Una mayor velocidad resulta en un alpha más alto (menos suavizado, más reactividad).
+            velocity_scale = 15.0  # Factor para amplificar el efecto de la velocidad
+            min_alpha = self.base_ema_alpha
+            max_alpha = 0.9  # Límite superior para alpha para prevenir jitter excesivo
+
+            dynamic_alpha = min(min_alpha + velocity * velocity_scale, max_alpha)
+
+        self.last_dynamic_alpha = dynamic_alpha
 
         if self.prev_smoothed_landmarks is None:
             self.prev_smoothed_landmarks = current_raw
+            self.prev_raw_landmarks = current_raw
             return current_raw
 
         smoothed = [
-            self.ema_alpha * current_raw[i] + (1 - self.ema_alpha) * self.prev_smoothed_landmarks[i]
+            dynamic_alpha * current_raw[i] + (1 - dynamic_alpha) * self.prev_smoothed_landmarks[i]
             for i in range(63)
         ]
         self.prev_smoothed_landmarks = smoothed
+        self.prev_raw_landmarks = current_raw
         return smoothed
 
     def reset_smoothing(self):
         # Reinicia el filtro de suavizado, útil al cambiar de modo o juego.
         self.prev_smoothed_landmarks = None
+        self.prev_raw_landmarks = None
+
+    def get_last_dynamic_alpha(self):
+        return self.last_dynamic_alpha
 
     def get_hand_confidence(self):
         # Retorna la puntuación de confianza de que una mano está presente.
-        if not self.results or not self.results.handedness:
+        with self.lock:
+            target_results = self.latest_results
+        if not target_results or not target_results.handedness:
             return 0.0
         try:
-            return float(self.results.handedness[0][0].score)
+            return float(target_results.handedness[0][0].score)
         except (IndexError, AttributeError):
             return 0.0
         
@@ -123,5 +156,5 @@ class HandTracker:
 
     def draw_hands(self, frame):
         # Método de conveniencia que detecta, suaviza y dibuja en un solo paso.
-        smoothed = self.get_landmarks(smooth=True)
-        return self.draw_landmarks(frame, smoothed)
+        landmarks = self.get_landmarks(smooth=True)
+        return self.draw_landmarks(frame, landmarks)

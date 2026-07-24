@@ -72,13 +72,15 @@ def save_data(label, landmarks):
 def auto_capture(tracker, cap, label, num_samples=500, delay=0.0):
     # Captura automáticamente un número definido de muestras estáticas.
     captured = 0
+    timestamp_ms = 0
     for i in range(num_samples):
         ret, frame = cap.read()
         if not ret:
             print("Error reading frame during auto capture")
             break
         frame = cv2.flip(frame, 1)
-        tracker.process_frame(frame)
+        timestamp_ms = int(time.time() * 1000)
+        tracker.process_frame_async(frame, timestamp_ms)
         landmarks = tracker.get_landmarks(smooth=True)
         if landmarks and len(landmarks) == 63:
             if save_data(label, landmarks):
@@ -112,13 +114,15 @@ def record_sequence(tracker, cap, label, seq_len=30):
     print("1")
     time.sleep(1)
     print("Recording")
+    timestamp_ms = 0
     for i in range(seq_len):
         ret, frame = cap.read()
         if not ret:
             print("Error reading frame")
             return
         frame = cv2.flip(frame, 1)
-        tracker.process_frame(frame)
+        timestamp_ms = int(time.time() * 1000)
+        tracker.process_frame_async(frame, timestamp_ms)
         landmarks = tracker.get_landmarks(smooth=True)
         if len(landmarks) != 63:
             print(f"Frame {i+1}: hand not detected, recording cancelled")
@@ -145,7 +149,7 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
 
-    tracker = HandTracker(ema_alpha=0.25)
+    tracker = HandTracker(ema_alpha=0.2)
     last_detected_label = None
 
     # --- Instrucciones de Uso ---
@@ -159,14 +163,16 @@ def main():
 
     try:
         # --- Bucle Principal de Captura ---
+        timestamp_ms = 0
         while True:
             ret, frame = cap.read()
             if not ret:
                 print("Error reading frame")
                 break
 
+            timestamp_ms = int(time.time() * 1000)
             frame = cv2.flip(frame, 1)
-            tracker.process_frame(frame)
+            tracker.process_frame_async(frame, timestamp_ms)
             frame = tracker.draw_hands(frame)
             landmarks = tracker.get_landmarks(smooth=True)
 
