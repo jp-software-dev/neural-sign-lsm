@@ -18,14 +18,16 @@ from tensorflow.keras.layers import ( # type: ignore
     Dense, Dropout, BatchNormalization,
     LSTM, InputLayer, Activation,
 )
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau # type: ignore
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau # type: ignore
 from tensorflow.keras.utils import to_categorical # type: ignore
 from tensorflow.keras import regularizers # type: ignore
 
 from src.config.settings import (
     LANDMARKS_CSV_PATH, AI_MODEL_PATH, LABELS_JSON_PATH,
-    MODELS_DIR, SCALER_PATH,
+    MODELS_DIR, SCALER_PATH, SEQUENCES_DIR,
+    LSTM_MODEL_PATH, LSTM_LABELS_JSON_PATH, LSTM_SCALER_PATH,
 )
+from src.ai_engine.features import normalize_landmarks
 from src.utils import app_logger
 
 # --- Constantes para Dibujo ---
@@ -43,6 +45,10 @@ HAND_CONNECTIONS = [
     # Meñique
     (17, 18), (18, 19), (19, 20),
 ]
+
+# Las capturas automáticas guardan ráfagas de 500 frames consecutivos; cada ráfaga se trata
+# como un grupo para que la validación use grabaciones que el modelo no vio al entrenar.
+CAPTURE_GROUP_SIZE = 500
 
 # --- Funciones Auxiliares ---
 def _draw_landmarks_on_canvas(landmarks_flat, true_label, pred_label, img_size=400, padding=40):
@@ -80,6 +86,26 @@ def _draw_landmarks_on_canvas(landmarks_flat, true_label, pred_label, img_size=4
     cv2.putText(img, f"Prediccion: {pred_label}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
     return img
 
+def capture_groups(labels):
+    # Asigna un id de grupo a cada fila: ráfagas contiguas de la misma letra, partidas cada 500 filas.
+    labels = pd.Series(labels)
+    run_id = (labels != labels.shift()).cumsum().values
+    pos_in_run = pd.Series(np.arange(len(labels))).groupby(run_id).cumcount().values
+    return run_id * 1000 + pos_in_run // CAPTURE_GROUP_SIZE
+
+def augment_hands(X, rng, noise_factor=0.02, max_rotation=0.25, scale_range=(0.9, 1.1)):
+    # Genera copias con rotación en el plano, cambio de escala y ruido gaussiano,
+    # simulando variaciones naturales de la mano frente a la cámara.
+    pts = X.reshape(-1, 21, 3).copy()
+    angles = rng.uniform(-max_rotation, max_rotation, len(pts))
+    cos, sin = np.cos(angles)[:, None], np.sin(angles)[:, None]
+    x, y = pts[..., 0].copy(), pts[..., 1].copy()
+    pts[..., 0] = cos * x - sin * y
+    pts[..., 1] = sin * x + cos * y
+    pts *= rng.uniform(*scale_range, (len(pts), 1, 1))
+    pts += rng.normal(0.0, noise_factor, pts.shape)
+    return pts.reshape(-1, 63).astype(np.float32)
+
 def set_seed(seed: int = 42):
     # Establece una semilla fija para bibliotecas de aleatoriedad para asegurar la reproducibilidad.
     os.environ['PYTHONHASHSEED'] = str(seed)
@@ -87,8 +113,6 @@ def set_seed(seed: int = 42):
     np.random.seed(seed)
     tf.random.set_seed(seed)
     tf.config.experimental.enable_op_determinism()
-
-set_seed(42)
 
 class SignLanguageTrainer:
     # Orquesta el proceso de entrenamiento del modelo de IA.
@@ -98,45 +122,45 @@ class SignLanguageTrainer:
         self.seq_len = seq_len
         if not os.path.exists(MODELS_DIR):
             os.makedirs(MODELS_DIR)
+        if mode == 'static':
+            self.model_path, self.labels_path, self.scaler_path = AI_MODEL_PATH, LABELS_JSON_PATH, SCALER_PATH
+        else:
+            self.model_path, self.labels_path, self.scaler_path = LSTM_MODEL_PATH, LSTM_LABELS_JSON_PATH, LSTM_SCALER_PATH
         self.model = None
         self.label_encoder = LabelEncoder()
         self.scaler = StandardScaler()
         self.num_classes = 0
-        self._y_encoded_train: np.ndarray | None = None
+        self.rng = np.random.default_rng(42)
 
     def load_data(self):
         # Carga los datos según el modo de entrenamiento (estático o secuencial).
+        # Devuelve features normalizadas, etiquetas codificadas y grupos de captura.
         if self.mode == 'static':
             return self._load_static_data()
         return self._load_sequence_data()
 
     def _load_static_data(self):
-        # Carga y preprocesa los datos desde el archivo CSV para el modelo estático.
+        # Carga el CSV de landmarks y los normaliza respecto a la muñeca y el tamaño de la mano.
         try:
             df = pd.read_csv(LANDMARKS_CSV_PATH, header=None)
             y_raw = df.iloc[:, 0].values
-            X = df.iloc[:, 1:].values.astype(np.float32)
-            X = self.scaler.fit_transform(X)
-            self._save_scaler()
-            y_encoded = self.label_encoder.fit_transform(y_raw)
+            X = normalize_landmarks(df.iloc[:, 1:].values.astype(np.float32))
+            y = self.label_encoder.fit_transform(y_raw)
             self.num_classes = len(self.label_encoder.classes_)
-            y = to_categorical(y_encoded, num_classes=self.num_classes)
             self.save_labels()
-            self._y_encoded_all = y_encoded
-            return X, y
+            return X, y, capture_groups(y_raw)
         except Exception as e:
             app_logger.error(f"Error cargando dataset estático: {str(e)}")
             raise
 
     def _load_sequence_data(self):
-        # Carga y preprocesa los datos desde archivos .npy para el modelo LSTM.
+        # Carga y normaliza las secuencias .npy para el modelo LSTM.
         try:
             sequences, labels = [], []
-            base_dir = "data/sequences"
-            if not os.path.exists(base_dir):
-                raise FileNotFoundError(f"Directorio {base_dir} no encontrado.")
-            for letra in os.listdir(base_dir):
-                letra_path = os.path.join(base_dir, letra)
+            if not os.path.exists(SEQUENCES_DIR):
+                raise FileNotFoundError(f"Directorio {SEQUENCES_DIR} no encontrado.")
+            for letra in os.listdir(SEQUENCES_DIR):
+                letra_path = os.path.join(SEQUENCES_DIR, letra)
                 if not os.path.isdir(letra_path):
                     continue
                 for file in os.listdir(letra_path):
@@ -144,25 +168,43 @@ class SignLanguageTrainer:
                         seq = np.load(os.path.join(letra_path, file))
                         if seq.shape != (self.seq_len, 63):
                             continue
-                        sequences.append(seq)
+                        sequences.append(normalize_landmarks(seq))
                         labels.append(letra)
             if not sequences:
                 raise ValueError("No se encontraron secuencias válidas.")
-            X = np.array(sequences)
-            X_reshaped = X.reshape(-1, 63)
-            X_scaled = self.scaler.fit_transform(X_reshaped)
-            X = X_scaled.reshape(-1, self.seq_len, 63)
-            self._save_scaler()
-            y_raw = np.array(labels)
-            y_encoded = self.label_encoder.fit_transform(y_raw)
+            X = np.array(sequences, dtype=np.float32)
+            y = self.label_encoder.fit_transform(np.array(labels))
             self.num_classes = len(self.label_encoder.classes_)
-            y = to_categorical(y_encoded, num_classes=self.num_classes)
             self.save_labels()
-            self._y_encoded_all = y_encoded
-            return X, y
+            # Cada secuencia es una grabación independiente
+            return X, y, np.arange(len(y))
         except Exception as e:
             app_logger.error(f"Error cargando dataset secuencial: {str(e)}")
             raise
+
+    def _split(self, X, y, groups):
+        # Estático: la última ráfaga grabada de cada letra se reserva para validación.
+        # LSTM: división aleatoria estratificada (pocas secuencias por letra).
+        if self.mode == 'static':
+            test = np.zeros(len(y), dtype=bool)
+            for cls in np.unique(y):
+                cls_groups = np.unique(groups[y == cls])
+                if len(cls_groups) > 1:
+                    test |= groups == cls_groups.max()
+            return ~test, test
+        idx_train, idx_test = train_test_split(
+            np.arange(len(y)), test_size=0.2, random_state=42, stratify=y
+        )
+        train = np.zeros(len(y), dtype=bool)
+        train[idx_train] = True
+        return train, ~train
+
+    def _fit_scaler(self, X):
+        flat = X.reshape(-1, 63)
+        self.scaler = StandardScaler().fit(flat)
+
+    def _scale(self, X):
+        return self.scaler.transform(X.reshape(-1, 63)).reshape(X.shape).astype(np.float32)
 
     def build_model(self, input_shape):
         # Construye la arquitectura del modelo (DNN o LSTM) según el modo.
@@ -205,77 +247,95 @@ class SignLanguageTrainer:
         ])
         self.model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
 
-    def _augment_data(self, X, y, noise_factor=0.04):
-        # Aplica aumento de datos añadiendo ruido gaussiano.
-        noise = np.random.normal(loc=0.0, scale=noise_factor, size=X.shape)
-        X_noisy = X + noise
-        X_combined = np.vstack((X, X_noisy))
-        y_combined = np.vstack((y, y))
-        return X_combined, y_combined
+    def _augment_data(self, X, y):
+        # Duplica el conjunto de entrenamiento con variaciones geométricas (solo modo estático).
+        X_aug = augment_hands(X, self.rng)
+        return np.vstack((X, X_aug)), np.concatenate((y, y))
 
-    def train_model(self):
+    def _fit(self, X_train, y_train, X_val=None, y_val=None, epochs=120):
+        # Entrena un modelo nuevo; con datos de validación usa early stopping.
+        if self.mode == 'static':
+            X_train, y_train = self._augment_data(X_train, y_train)
+            self.build_model(input_shape=X_train.shape[1])
+        else:
+            self.build_model(input_shape=(X_train.shape[1], X_train.shape[2]))
+
+        # Calcula pesos de clases para manejar datasets desbalanceados
+        classes = np.unique(y_train)
+        weights = compute_class_weight(class_weight='balanced', classes=classes, y=y_train)
+        class_weight_dict = dict(zip(classes.tolist(), weights.tolist()))
+
+        validation_data, callbacks = None, []
+        monitor = 'val_loss' if X_val is not None else 'loss'
+        if X_val is not None:
+            validation_data = (X_val, to_categorical(y_val, num_classes=self.num_classes))
+            callbacks.append(EarlyStopping(monitor='val_loss', patience=15, restore_best_weights=True))
+        callbacks.append(ReduceLROnPlateau(monitor=monitor, factor=0.5, patience=5, min_lr=1e-5, verbose=1))
+
+        history = self.model.fit(
+            X_train, to_categorical(y_train, num_classes=self.num_classes),
+            validation_data=validation_data,
+            epochs=epochs,
+            batch_size=32,
+            class_weight=class_weight_dict,
+            callbacks=callbacks,
+        )
+        return history
+
+    def train_model(self, final_fit: bool = True):
         # Función principal que ejecuta todo el pipeline de entrenamiento.
+        # 1) Entrena y evalúa con grabaciones no vistas. 2) Reentrena con todos los datos
+        #    durante el número de épocas óptimo encontrado y guarda ese modelo.
         try:
-            X, y = self.load_data()
-            X_train, X_test, y_train, y_test, idx_train, _ = train_test_split(
-                X, y, np.arange(len(y)), test_size=0.2, random_state=42
-            )
-            
-            # Aplica aumento de datos solo al conjunto de entrenamiento
-            if self.mode == 'static':
-                X_train, y_train = self._augment_data(X_train, y_train)
+            set_seed(42)
+            X, y, groups = self.load_data()
+            train_mask, test_mask = self._split(X, y, groups)
+            X_train, y_train, X_test, y_test = X[train_mask], y[train_mask], X[test_mask], y[test_mask]
 
-            if self.mode == 'static':
-                self.build_model(input_shape=X_train.shape[1])
-            else:
-                self.build_model(input_shape=(X_train.shape[1], X_train.shape[2]))
-                
-            # Calcula pesos de clases para manejar datasets desbalanceados
-            y_encoded_train = np.argmax(y_train, axis=1)
-            classes = np.unique(y_encoded_train)
-            weights = compute_class_weight(
-                class_weight='balanced',
-                classes=classes,
-                y=y_encoded_train,
-            )
-            class_weight_dict = dict(zip(classes.tolist(), weights.tolist()))
-            
-            # Define callbacks para el entrenamiento
-            early_stop = EarlyStopping(monitor='val_loss', patience=15, restore_best_weights=True)
-            checkpoint = ModelCheckpoint(AI_MODEL_PATH, monitor='val_accuracy', save_best_only=True, verbose=1)
-            reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-5, verbose=1)
-            
-            self.model.fit(
-                X_train, y_train,
-                validation_data=(X_test, y_test),
-                epochs=120,
-                batch_size=32,
-                class_weight=class_weight_dict,
-                callbacks=[early_stop, checkpoint, reduce_lr],
-            )
-            # Genera y guarda el reporte de evaluación final
-            self._save_training_report(X_test, y_test)
+            self._fit_scaler(X_train)
+            history = self._fit(self._scale(X_train), y_train, self._scale(X_test), y_test)
+            best_epoch = int(np.argmin(history.history['val_loss'])) + 1
+            self._save_training_report(self._scale(X_test), y_test, best_epoch)
+
+            if final_fit:
+                print(f"\n[INFO] Reentrenando con todos los datos durante {best_epoch} épocas...")
+                set_seed(42)
+                self._fit_scaler(X)
+                self._fit(self._scale(X), y, epochs=best_epoch)
+
+            self.model.save(self.model_path)
+            self._save_scaler()
+            print(f"[INFO] Modelo guardado en: {self.model_path}")
         except Exception as e:
             app_logger.error(f"Fallo crítico durante el entrenamiento: {e}")
+            raise
 
-    def _save_training_report(self, X_test, y_test):
-        # Evalúa el modelo con los datos de prueba y guarda un reporte de clasificación,
+    def _save_training_report(self, X_test, y_test, best_epoch):
+        # Evalúa el modelo con los datos de validación y guarda un reporte de clasificación,
         # una matriz de confusión y visualizaciones de errores.
         try:
             print("\n[INFO] Generando reporte de clasificación y matriz de confusión...")
-            y_pred_probs = self.model.predict(X_test)
-            y_pred = np.argmax(y_pred_probs, axis=1)
-            y_true = np.argmax(y_test, axis=1)
-            report = classification_report(y_true, y_pred, target_names=self.label_encoder.classes_, zero_division=0)
-            conf_matrix = confusion_matrix(y_true, y_pred)
-            report_path = os.path.join(MODELS_DIR, "training_report.txt")
+            y_pred = np.argmax(self.model.predict(X_test, verbose=0), axis=1)
+            y_true = y_test
+            labels_idx = np.arange(self.num_classes)
+            report = classification_report(
+                y_true, y_pred, labels=labels_idx,
+                target_names=self.label_encoder.classes_, zero_division=0,
+            )
+            conf_matrix = confusion_matrix(y_true, y_pred, labels=labels_idx)
+            accuracy = float(np.mean(y_pred == y_true))
+            report_path = os.path.join(MODELS_DIR, f"training_report_{self.mode}.txt")
             with open(report_path, 'w', encoding='utf-8') as f:
                 f.write("Reporte de Clasificación del Entrenamiento\n")
                 f.write("="*40 + "\n")
+                f.write(f"Validación: grabaciones no vistas en el entrenamiento ({len(y_true)} muestras)\n")
+                f.write(f"Precisión de validación: {accuracy:.4f}\n")
+                f.write(f"Mejor época: {best_epoch}\n\n")
                 f.write(report)
                 f.write("\n\nMatriz de Confusión\n")
                 f.write("="*40 + "\n")
-                f.write(np.array2string(conf_matrix, separator=', '))
+                f.write(np.array2string(conf_matrix, separator=', ', max_line_width=200))
+            print(f"[INFO] Precisión de validación: {accuracy:.4f}")
             print(f"[INFO] Reporte guardado en: {report_path}")
 
             # Guarda imágenes de algunas predicciones incorrectas para análisis visual
@@ -310,7 +370,7 @@ class SignLanguageTrainer:
     def _save_scaler(self):
         # Guarda el objeto `StandardScaler` ajustado en un archivo pickle.
         try:
-            with open(SCALER_PATH, 'wb') as f:
+            with open(self.scaler_path, 'wb') as f:
                 pickle.dump(self.scaler, f)
         except Exception as e:
             app_logger.error(f"Error guardando el escalador: {str(e)}")
@@ -319,7 +379,7 @@ class SignLanguageTrainer:
         # Guarda el mapeo de índices a etiquetas de clase en un archivo JSON.
         label_mapping = {int(i): str(label) for i, label in enumerate(self.label_encoder.classes_)}
         try:
-            with open(LABELS_JSON_PATH, 'w') as f:
+            with open(self.labels_path, 'w') as f:
                 json.dump(label_mapping, f, indent=4)
         except Exception as e:
             app_logger.error(f"Error guardando JSON de etiquetas: {str(e)}")
@@ -329,6 +389,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', type=str, default='static', choices=['static', 'lstm'])
     parser.add_argument('--seq_len', type=int, default=30)
+    parser.add_argument('--no-final-fit', action='store_true',
+                        help='Guarda el modelo validado sin reentrenar con todos los datos')
     args = parser.parse_args()
     trainer = SignLanguageTrainer(mode=args.mode, seq_len=args.seq_len)
-    trainer.train_model()
+    trainer.train_model(final_fit=not args.no_final_fit)
