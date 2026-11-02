@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tensorflow.keras.models import load_model # type: ignore
 from src.config.settings import (
     AI_MODEL_PATH, LABELS_JSON_PATH, SCALER_PATH,
-    SEQUENCE_LENGTH, AI_CONFIDENCE_THRESHOLD,
+    SEQUENCE_LENGTH, AI_CONFIDENCE_THRESHOLD, STABLE_FRAMES_REQUIRED,
     COLOR_SUCCESS, COLOR_DANGER, COLOR_INFO, FPS_LIMIT,
 )
 from src.ai_engine.hand_tracking import HandTracker # type: ignore
@@ -48,9 +48,10 @@ def draw_hud(frame, status_text, color, game, debug_info=None):
     if game and game.game_active:
         progress = game.progress_display
         cv2.putText(frame, f"Palabra: {progress}", (15, 65), FONT, 0.8, WORD_COLOR, 2, cv2.LINE_AA)
+        streak_text = f"Racha: {game.streak}x | " if game.MODE == GameMode.GAME else ""
         hud_right = (
             f"Pts: {game.score} | "
-            f"Racha: {game.streak}x | " if game.MODE == GameMode.GAME else ""
+            f"{streak_text}"
             f"Palabras: {game.words_completed} | "
             f"Tiempo: {game.time_left}s"
         )
@@ -292,14 +293,13 @@ def handle_stability(detected_letter, confidence, candidate_letter, stable_frame
         else:
             candidate_letter = detected_letter
             stable_frames = 1
-        
-        REQUIRED_FRAMES = 5
-        if stable_frames >= REQUIRED_FRAMES:
+
+        if stable_frames >= STABLE_FRAMES_REQUIRED:
             confirmed_letter = candidate_letter
             status_text = f"Letra: {confirmed_letter} ({int(confidence * 100)}%)"
             color = COLOR_SUCCESS
         else:
-            status_text = f"Sosten la seña... {stable_frames}/{REQUIRED_FRAMES}"
+            status_text = f"Sosten la seña... {stable_frames}/{STABLE_FRAMES_REQUIRED}"
             color = (0, 165, 255)
     else:
         candidate_letter = ""
@@ -350,18 +350,23 @@ def main():
     time.sleep(2)
 
     frame_interval = 1.0 / FPS_LIMIT
+    last_tick = time.time()
 
     while cap.isOpened():
         timestamp_ms = int(time.time() * 1000)
-        start_time = time.time()
         success, frame = cap.read()
         if not success:
             break
         frame = cv2.flip(frame, 1)
 
-        elapsed_time = time.time() - start_time
+        # Limita los FPS considerando el tiempo de toda la iteración anterior, no solo la lectura de cámara
+        elapsed_time = time.time() - last_tick
         wait_time = max(1, int((frame_interval - elapsed_time) * 1000))
         key = cv2.waitKey(wait_time) & 0xFF
+        last_tick = time.time()
+        # Las teclas de letra se aceptan en mayúscula o minúscula
+        if ord('A') <= key <= ord('Z'):
+            key = key + 32
 
         if app_state == "selecting_difficulty":
             draw_difficulty_menu(frame)
@@ -467,55 +472,63 @@ def main():
                 voice.speak("Juego reanudado.")
         
         elif app_state in ["menu", "in_game"]:
-            if app_state != "summary":
-                tracker.process_frame_async(frame, timestamp_ms)
-                landmarks = tracker.get_landmarks(smooth=True)
-                hand_confidence = tracker.get_hand_confidence()
-                
-                # Recopila información de depuración para el HUD
-                debug_info = {'alpha': tracker.get_last_dynamic_alpha()}
+            tracker.process_frame_async(frame, timestamp_ms)
+            landmarks = tracker.get_landmarks(smooth=True)
+            hand_confidence = tracker.get_hand_confidence()
+            
+            # Recopila información de depuración para el HUD
+            debug_info = {'alpha': tracker.get_last_dynamic_alpha()}
 
-                if landmarks and hand_confidence > 0.4:
-                    tracker.draw_landmarks(frame, landmarks)
-                    detected_letter, confidence = process_prediction(landmarks, scaler, model, labels, is_lstm, sequence_buffer)
+            if landmarks and hand_confidence > 0.4:
+                tracker.draw_landmarks(frame, landmarks)
+                detected_letter, confidence = process_prediction(landmarks, scaler, model, labels, is_lstm, sequence_buffer)
 
-                    if detected_letter:
-                        candidate_letter, stable_frames, confirmed, text, c = handle_stability(detected_letter, confidence, candidate_letter, stable_frames)
-                        status_text, color = text, c
+                if detected_letter:
+                    candidate_letter, stable_frames, confirmed, text, c = handle_stability(detected_letter, confidence, candidate_letter, stable_frames)
+                    status_text, color = text, c
 
-                        if confirmed and confirmed != last_prediction:
-                            last_prediction = confirmed
-                            if app_state == "in_game" and game and game.game_active:
-                                is_correct, game_msg = game.check_prediction(confirmed)
-                                status_text = game_msg
-                                if is_correct:
-                                    sound_manager.play("correct")
-                                    if "¡Palabra!" in game_msg:
-                                        voice.speak("Palabra completa")
-                                        if game.game_active:
-                                            voice.speak(f"Siguiente letra: {game.target_letter}")
-                                    else:
-                                        voice.speak("Correcto")
+                    # En juego se permite repetir la letra si es la siguiente del objetivo (ej. "RR" en PERRO)
+                    repeat_allowed = (
+                        app_state == "in_game" and game and game.game_active
+                        and confirmed == game.target_letter
+                    )
+                    if confirmed and (confirmed != last_prediction or repeat_allowed):
+                        last_prediction = confirmed
+                        if app_state == "in_game" and game and game.game_active:
+                            # Obliga a sostener de nuevo la seña antes de volver a confirmarla
+                            stable_frames, candidate_letter = 0, ""
+                            is_correct, game_msg = game.check_prediction(confirmed)
+                            status_text = game_msg
+                            if is_correct:
+                                sound_manager.play("correct")
+                                if "¡Palabra!" in game_msg:
+                                    voice.speak("Palabra completa")
+                                    if game.game_active:
+                                        voice.speak(f"Siguiente letra: {game.target_letter}")
                                 else:
-                                    sound_manager.play("incorrect")
+                                    voice.speak("Correcto")
+                            else:
+                                sound_manager.play("incorrect")
 
-                                if not game.game_active:
-                                    final_score = game.score
-                                    if profile_manager.is_high_score(final_score, high_scores):
-                                        app_state = "entering_name"
-                                        current_name = ""
-                                        voice.speak("Nuevo record. Ingresa tu nombre y presiona enter.")
-                                    else:
-                                        app_state = "summary"
-                                    voice.speak(game_msg)
-                            else: # Modo Libre
-                                voice.speak(confirmed)
-                            if is_lstm: sequence_buffer.clear()
-                    elif is_lstm:
-                        status_text, color = f"Capturando... {len(sequence_buffer)}/{SEQUENCE_LENGTH}", COLOR_INFO
-                else:
-                    status_text, color, stable_frames, candidate_letter = "Esperando mano...", COLOR_INFO, 0, ""
-                    if is_lstm and sequence_buffer: sequence_buffer.clear()
+                            if not game.game_active:
+                                final_score = game.score
+                                if profile_manager.is_high_score(final_score, high_scores):
+                                    app_state = "entering_name"
+                                    current_name = ""
+                                    voice.speak("Nuevo record. Ingresa tu nombre y presiona enter.")
+                                else:
+                                    app_state = "summary"
+                                voice.speak(game_msg)
+                        else: # Modo Libre
+                            voice.speak(confirmed)
+                        if is_lstm: sequence_buffer.clear()
+                elif is_lstm:
+                    status_text, color = f"Capturando... {len(sequence_buffer)}/{SEQUENCE_LENGTH}", COLOR_INFO
+            else:
+                # Retirar la mano libera la última letra, permitiendo repetirla (ej. "RR" en PERRO)
+                status_text, color, stable_frames, candidate_letter = "Esperando mano...", COLOR_INFO, 0, ""
+                last_prediction = ""
+                if is_lstm and sequence_buffer: sequence_buffer.clear()
 
             if app_state == "in_game" and game:
                 expired, msg = game.check_time()
