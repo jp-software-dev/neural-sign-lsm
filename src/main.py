@@ -13,10 +13,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tensorflow.keras.models import load_model # type: ignore
 from src.config.settings import (
     AI_MODEL_PATH, LABELS_JSON_PATH, SCALER_PATH,
+    LSTM_MODEL_PATH, LSTM_LABELS_JSON_PATH, LSTM_SCALER_PATH, USE_LSTM_MODEL,
     SEQUENCE_LENGTH, AI_CONFIDENCE_THRESHOLD, STABLE_FRAMES_REQUIRED,
     COLOR_SUCCESS, COLOR_DANGER, COLOR_INFO, FPS_LIMIT,
 )
 from src.ai_engine.hand_tracking import HandTracker # type: ignore
+from src.ai_engine.features import normalize_landmarks
 from src.modules import VoiceAssistant, SignGame, GameMode, profile_manager, sound_manager
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
@@ -242,13 +244,17 @@ def draw_pause_screen(frame):
 
 def load_dependencies():
     # Carga los artefactos de IA (modelo, escalador, etiquetas) al iniciar.
+    if USE_LSTM_MODEL:
+        model_path, labels_path, scaler_path = LSTM_MODEL_PATH, LSTM_LABELS_JSON_PATH, LSTM_SCALER_PATH
+    else:
+        model_path, labels_path, scaler_path = AI_MODEL_PATH, LABELS_JSON_PATH, SCALER_PATH
     try:
-        model = load_model(AI_MODEL_PATH)
-        with open(LABELS_JSON_PATH, 'r') as f:
+        model = load_model(model_path, compile=False)
+        with open(labels_path, 'r') as f:
             labels_dict = json.load(f)
         labels = {int(k): v for k, v in labels_dict.items()}
         available_letters = list(labels.values())
-        with open(SCALER_PATH, 'rb') as f:
+        with open(scaler_path, 'rb') as f:
             scaler = pickle.load(f)
         is_lstm = len(model.input_shape) == 3
         print("[INFO] Dependencias cargadas correctamente.")
@@ -259,16 +265,16 @@ def load_dependencies():
 
 def process_prediction(landmarks, scaler, model, labels, is_lstm, sequence_buffer):
     # Toma los landmarks, los procesa y devuelve la predicción del modelo.
+    # Se aplica la misma normalización (posición y tamaño de la mano) que en el entrenamiento
     prediction_input = None
     if is_lstm:
-        sequence_buffer.append(landmarks)
+        sequence_buffer.append(normalize_landmarks(landmarks))
         if len(sequence_buffer) == SEQUENCE_LENGTH:
-            raw_data = np.array(sequence_buffer)
-            scaled_data = scaler.transform(raw_data)
+            scaled_data = scaler.transform(np.array(sequence_buffer))
             prediction_input = np.expand_dims(scaled_data, axis=0)
     else:
-        raw_data = np.array(landmarks).reshape(1, -1)
-        prediction_input = scaler.transform(raw_data)
+        features = normalize_landmarks(landmarks).reshape(1, -1)
+        prediction_input = scaler.transform(features)
 
     if prediction_input is not None:
         # Optimización: Llamar al modelo directamente es más rápido para inferencia en tiempo real que model.predict().
