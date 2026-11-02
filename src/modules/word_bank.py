@@ -30,7 +30,8 @@ WORD_BANK = {
     ],
 }
 
-ALL_WORDS = [w for words in WORD_BANK.values() for w in words]
+# Sin duplicados entre niveles para que el modo aleatorio no favorezca ciertas palabras
+ALL_WORDS = list(dict.fromkeys(w for words in WORD_BANK.values() for w in words))
 
 def get_words_by_difficulty(difficulty: str) -> list[str]:
     # Devuelve una lista de palabras basada en el nivel de dificultad.

@@ -53,7 +53,7 @@ class BaseGame:
             return False, ""
         if self.time_left <= 0:
             self.game_active = False
-            return True, f"¡Tiempo! Puntuación: {self.score} | Palabras: {self._words_completed}"
+            return True, f"¡Tiempo! Puntuación: {self.score} pts | Palabras: {self._words_completed}"
         return False, ""
 
     def pause(self):
@@ -130,7 +130,6 @@ class SignGame(BaseGame):
         # --- Estado Específico del Juego ---
         self.streak: int = 0
         self.peak_streak: int = 0
-        self.time_limit: int = 60
 
     def start_game(self, difficulty: str | None = None) -> str:
         # Inicia una nueva partida de SignGame.
@@ -138,15 +137,6 @@ class SignGame(BaseGame):
         self.streak = 0
         self.peak_streak = 0
         return self.target_letter
-
-    def check_time(self) -> tuple[bool, str]:
-        # Verifica el tiempo y finaliza el juego si se ha agotado.
-        if not self.game_active:
-            return False, ""
-        if self.time_left <= 0:
-            self.game_active = False
-            return True, f"¡Tiempo! Puntuación: {self.score} pts | Palabras: {self._words_completed}"
-        return False, ""
 
     def check_prediction(self, predicted_letter: str) -> tuple[bool, str]:
         # Procesa la predicción del usuario y actualiza el estado del juego.
@@ -188,4 +178,5 @@ class SignGame(BaseGame):
             if all(ch in self.available_letters for ch in w.upper())
         ]
         if not self._word_pool:
-            self._word_pool = self.available_letters[:10] or ["A"]
+            # Si ninguna palabra es formable, se juega con letras sueltas del modelo
+            self._word_pool = sorted(self.available_letters)[:10] or ["A"]
