@@ -5,7 +5,7 @@ import mediapipe as mp
 from mediapipe.tasks.python import vision
 from mediapipe.tasks.python.core.base_options import BaseOptions
 import threading
-from src.config.settings import MP_DETECTION_CONFIDENCE, MP_TRACKING_CONFIDENCE
+from src.config.settings import MP_DETECTION_CONFIDENCE, MP_TRACKING_CONFIDENCE, HAND_LANDMARKER_PATH
 
 HAND_CONNECTIONS = [
     # Palma
@@ -34,8 +34,7 @@ class HandTracker:
             with self.lock:
                 self.latest_results = result
 
-        model_path = "hand_landmarker.task"
-        base_options = BaseOptions(model_asset_path=model_path)
+        base_options = BaseOptions(model_asset_path=HAND_LANDMARKER_PATH)
         options = vision.HandLandmarkerOptions(
             base_options=base_options,
             running_mode=vision.RunningMode.LIVE_STREAM,
@@ -50,12 +49,21 @@ class HandTracker:
         # --- Configuración del Filtro de Suavizado (EMA) ---
         self.base_ema_alpha = ema_alpha
         self.prev_smoothed_landmarks = None
-        self.consecutive_no_hand = 0
         self.prev_raw_landmarks = None
         self.last_dynamic_alpha = ema_alpha
 
+        # Último resultado ya suavizado, para no aplicar el EMA dos veces al mismo resultado
+        self._last_processed_result = None
+        self._last_output = []
+        self.last_result_is_new = False
+        self._last_timestamp_ms = -1
+
     def process_frame_async(self, frame, timestamp_ms: int):
         # Procesa un frame de video para detectar manos de forma asíncrona.
+        # MediaPipe exige timestamps estrictamente crecientes en modo LIVE_STREAM
+        if timestamp_ms <= self._last_timestamp_ms:
+            timestamp_ms = self._last_timestamp_ms + 1
+        self._last_timestamp_ms = timestamp_ms
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
         self.detector.detect_async(mp_image, timestamp_ms)
@@ -67,13 +75,19 @@ class HandTracker:
         with self.lock:
             target_results = self.latest_results
 
+        # Si el detector aún no entrega un resultado nuevo, se devuelve el último cálculo
+        if target_results is not None and target_results is self._last_processed_result and smooth:
+            self.last_result_is_new = False
+            return list(self._last_output)
+        self._last_processed_result = target_results
+        self.last_result_is_new = True
+
         if not target_results or not target_results.hand_landmarks:
             self.prev_smoothed_landmarks = None
             self.prev_raw_landmarks = None
-            self.consecutive_no_hand += 1
+            self._last_output = []
             return []
 
-        self.consecutive_no_hand = 0
         hand = target_results.hand_landmarks[0]
         current_raw = [coord for lm in hand for coord in (lm.x, lm.y, lm.z)]
 
@@ -102,7 +116,8 @@ class HandTracker:
         if self.prev_smoothed_landmarks is None:
             self.prev_smoothed_landmarks = current_raw
             self.prev_raw_landmarks = current_raw
-            return current_raw
+            self._last_output = current_raw
+            return list(current_raw)
 
         smoothed = [
             dynamic_alpha * current_raw[i] + (1 - dynamic_alpha) * self.prev_smoothed_landmarks[i]
@@ -110,12 +125,15 @@ class HandTracker:
         ]
         self.prev_smoothed_landmarks = smoothed
         self.prev_raw_landmarks = current_raw
-        return smoothed
+        self._last_output = smoothed
+        return list(smoothed)
 
     def reset_smoothing(self):
         # Reinicia el filtro de suavizado, útil al cambiar de modo o juego.
         self.prev_smoothed_landmarks = None
         self.prev_raw_landmarks = None
+        self._last_processed_result = None
+        self._last_output = []
 
     def get_last_dynamic_alpha(self):
         return self.last_dynamic_alpha
@@ -153,8 +171,3 @@ class HandTracker:
             cv2.circle(frame, (px, py), radius, (0, 255, 120), -1)
 
         return frame
-
-    def draw_hands(self, frame):
-        # Método de conveniencia que detecta, suaviza y dibuja en un solo paso.
-        landmarks = self.get_landmarks(smooth=True)
-        return self.draw_landmarks(frame, landmarks)

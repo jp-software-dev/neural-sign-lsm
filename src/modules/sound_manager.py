@@ -1,8 +1,12 @@
 # Gestiona la carga y reproducción de efectos de sonido.
-import pygame
 import os
+from src.config.settings import SOUNDS_DIR
 
-SOUNDS_DIR = "assets/sounds"
+# pygame es opcional: si no está instalado, la aplicación funciona sin efectos de sonido
+try:
+    import pygame
+except ImportError:
+    pygame = None
 
 sound_files = {
     "tick": "tick.wav",
@@ -15,6 +19,9 @@ sounds = {}
 
 def init():
     # Inicializa el mezclador de pygame y carga los sonidos.
+    if pygame is None:
+        print("[WARN] pygame no está instalado; se desactivan los efectos de sonido.")
+        return
     try:
         pygame.mixer.init()
         for name, filename in sound_files.items():

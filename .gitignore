@@ -17,9 +17,12 @@ data/processed/
 data/sequences/
 data/raw/
 
-# Modelos y diccionario de la IA
-models/*.h5
-models/*.json
+# Datos locales del usuario
+data/high_scores.json
+
+# Respaldos y capturas de errores del entrenamiento (el modelo y su reporte sí se versionan)
+models/backup/
+models/error_analysis/
 
 # Configuracion de Visual Studio Code
 .vscode/
@@ -27,7 +30,3 @@ models/*.json
 # Archivos temporales del sistema (Mac/Windows)
 .DS_Store
 Thumbs.db
-
-# Recursos pesados locales del tracker
-hand_landmarker.task
-hand_landmarker.task

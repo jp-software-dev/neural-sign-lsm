@@ -6,8 +6,10 @@ import csv
 import os
 import time
 import numpy as np
-from src.config.settings import CAMERA_WIDTH, CAMERA_HEIGHT, LANDMARKS_CSV_PATH
-from src.utils import app_logger
+from src.config.settings import (
+    CAMERA_WIDTH, CAMERA_HEIGHT, LANDMARKS_CSV_PATH,
+    SEQUENCES_DIR, REFERENCE_IMAGES_DIR, SEQUENCE_LENGTH,
+)
 from src.ai_engine.hand_tracking import HandTracker
 
 def ensure_dir(file_path):
@@ -20,8 +22,7 @@ def ensure_dir(file_path):
 def show_reference_image(frame, label, size=180):
     # Carga y superpone una imagen de referencia de la seña en la esquina superior derecha.
     # Asume que las imágenes están en 'data/reference_images/' y se llaman 'A.png', 'B.png', etc.
-    reference_dir = os.path.join("data", "reference_images")
-    img_path = os.path.join(reference_dir, f"{label}.png")
+    img_path = os.path.join(REFERENCE_IMAGES_DIR, f"{label}.png")
 
     if not os.path.exists(img_path):
         cv2.putText(frame, "No ref.", (frame.shape[1] - 85, 30),
@@ -72,7 +73,6 @@ def save_data(label, landmarks):
 def auto_capture(tracker, cap, label, num_samples=500, delay=0.0):
     # Captura automáticamente un número definido de muestras estáticas.
     captured = 0
-    timestamp_ms = 0
     for i in range(num_samples):
         ret, frame = cap.read()
         if not ret:
@@ -82,10 +82,11 @@ def auto_capture(tracker, cap, label, num_samples=500, delay=0.0):
         timestamp_ms = int(time.time() * 1000)
         tracker.process_frame_async(frame, timestamp_ms)
         landmarks = tracker.get_landmarks(smooth=True)
-        if landmarks and len(landmarks) == 63:
+        # Solo se guardan resultados nuevos del detector para no duplicar muestras
+        if tracker.last_result_is_new and landmarks and len(landmarks) == 63:
             if save_data(label, landmarks):
                 captured += 1
-        frame_show = tracker.draw_hands(frame)
+        frame_show = tracker.draw_landmarks(frame, landmarks)
         cv2.putText(frame_show, f"Auto: {label} - {captured}/{num_samples}", (10, 60),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         cv2.imshow("NeuralSign-LSM : Data Gathering", frame_show)
@@ -96,14 +97,14 @@ def auto_capture(tracker, cap, label, num_samples=500, delay=0.0):
 
 def save_sequence(label, sequence):
     # Guarda una secuencia de landmarks en un archivo .npy.
-    seq_dir = os.path.join("data", "sequences", label)
+    seq_dir = os.path.join(SEQUENCES_DIR, label)
     os.makedirs(seq_dir, exist_ok=True)
     timestamp = int(time.time() * 1000)
     filename = os.path.join(seq_dir, f"{timestamp}.npy")
     np.save(filename, np.array(sequence))
     print(f"[OK] Sequence saved to {filename}")
 
-def record_sequence(tracker, cap, label, seq_len=30):
+def record_sequence(tracker, cap, label, seq_len=SEQUENCE_LENGTH):
     # Graba una secuencia de movimiento de una longitud definida.
     print(f"Recording sequence for {label}")
     buffer = []
@@ -114,7 +115,6 @@ def record_sequence(tracker, cap, label, seq_len=30):
     print("1")
     time.sleep(1)
     print("Recording")
-    timestamp_ms = 0
     for i in range(seq_len):
         ret, frame = cap.read()
         if not ret:
@@ -128,7 +128,7 @@ def record_sequence(tracker, cap, label, seq_len=30):
             print(f"Frame {i+1}: hand not detected, recording cancelled")
             return
         buffer.append(landmarks)
-        frame_show = tracker.draw_hands(frame)
+        frame_show = tracker.draw_landmarks(frame, landmarks)
         cv2.putText(frame_show, f"Recording {label} - {i+1}/{seq_len}", (10, 60),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         cv2.imshow("NeuralSign-LSM : Data Gathering", frame_show)
@@ -163,7 +163,6 @@ def main():
 
     try:
         # --- Bucle Principal de Captura ---
-        timestamp_ms = 0
         while True:
             ret, frame = cap.read()
             if not ret:
@@ -173,8 +172,8 @@ def main():
             timestamp_ms = int(time.time() * 1000)
             frame = cv2.flip(frame, 1)
             tracker.process_frame_async(frame, timestamp_ms)
-            frame = tracker.draw_hands(frame)
             landmarks = tracker.get_landmarks(smooth=True)
+            frame = tracker.draw_landmarks(frame, landmarks)
 
             # --- Renderizado de Información en Pantalla (HUD) ---
             if last_detected_label:
@@ -210,7 +209,7 @@ def main():
                     print("No letter defined or hand not detected")
             elif key == ord('B'):
                 if last_detected_label:
-                    record_sequence(tracker, cap, last_detected_label, seq_len=30)
+                    record_sequence(tracker, cap, last_detected_label)
                 else:
                     print("First define a letter by pressing a-z")
             elif (97 <= key <= 122) or (65 <= key <= 90):
